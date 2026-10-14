@@ -1,0 +1,39 @@
+{
+  "chainId": 31337,
+  "network": "localhost",
+  "factory": "0xf8e31cb472bc70500f08cd84917e5a1912ec8397",
+  "locker": "0xA1Ee49A7156D264f4F6f886c03726b296A0A3dbD",
+  "feeSplitter": "0x93b87e23aE6f5345ECC1fF20323A2def3351F579",
+  "distributor": "0x3008C1E01962fbFb8df578BF5b881d5Ab9Ae49B1",
+  "flywheel": "0x66A17eC6720cF120bA9F6512B529D8D80E5cd1D7",
+  "quoteAdmin": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+  "ecosystem": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+  "rootPublisher": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+  "quoteAssets": [
+    {
+      "address": "0xc0f115a19107322cfbf1cdbc7ea011c19ebdb4f8",
+      "symbol": "WETH",
+      "decimals": 18,
+      "freezable": false
+    },
+    {
+      "address": "0xc96304e3c037f81da488ed9dea1d8f2a48278a75",
+      "symbol": "mUSD",
+      "decimals": 6,
+      "freezable": true
+    }
+  ],
+  "libraries": {
+    "TokenDeployer": "0x720472c8ce72c2a2d711333e064abd3e6bbeadd3",
+    "PoolDeployer": "0xe8d2a1e88c91dcd5433208d4152cc4f399a7e91d",
+    "SaleDeployer": "0x5067457698fd6fa1c6964e416b3f42713513b3dd",
+    "TreasuryDeployer": "0x18e317a7d70d8fbf8e6e893616b52390ebbdb629",
+    "MintTokenDeployer": "0x4b6ab5f819a515382b0deb6935d793817bb4af28",
+    "TaxPoolDeployer": "0xcace1b78160ae76398f486c8a18044da0d66d86d",
+    "EmissionDeployer": "0xd5ac451b0c50b9476107823af206ed814a2e2580"
+  },
+  "deployer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+  "deployedAt": "2026-10-10T11:12:07.033Z",
+  "startBlock": 266,
+  "gitCommit": null
+}

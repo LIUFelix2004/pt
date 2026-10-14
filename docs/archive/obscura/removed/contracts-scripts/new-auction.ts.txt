@@ -1,0 +1,128 @@
+/**
+ * Open a fresh auction on the contracts that are already deployed.
+ *
+ * `deploy.ts` ships new contracts every run, which wastes gas and invalidates
+ * every address the API, web app and MCP host are already configured with. When
+ * only the auction window has expired — a demo overran, a reveal was missed —
+ * this reuses the existing registry, auction and demo token and just opens
+ * another round.
+ *
+ *   npx hardhat run scripts/new-auction.ts --network sepolia
+ *
+ * Env:
+ *   DEMO_FOR_SALE_TOKENS  whole tokens offered (default 100)
+ *   DEMO_FLOOR_ETH        floor price per token (default 0.0001)
+ *   COMMIT_MINUTES        commit window (default 30)
+ *   REVEAL_MINUTES        reveal window (default 30)
+ */
+import { network } from "hardhat";
+import { formatEther, parseEther } from "viem";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { getChain, assertKeyIsSafeForChain, explorerTxUrl } from "@obscura/shared";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
+async function main() {
+  const { viem } = await network.connect();
+  const publicClient = await viem.getPublicClient();
+  const chainId = await publicClient.getChainId();
+  const chain = getChain(chainId);
+
+  const path = resolve(ROOT, `deployments/${chainId}.json`);
+  if (!existsSync(path)) throw new Error(`No deployments/${chainId}.json — deploy first.`);
+  const deployment = JSON.parse(readFileSync(path, "utf8"));
+  if (!deployment.demoToken) {
+    throw new Error("This deployment has no demoToken; nothing to re-auction.");
+  }
+
+  const [wallet] = await viem.getWalletClients();
+  if (!wallet) throw new Error("No signer. Set DEPLOYER_PRIVATE_KEY in .env.");
+  const me = wallet.account.address;
+  assertKeyIsSafeForChain(me, chainId);
+
+  const auction = await viem.getContractAt("LaunchpadAuction", deployment.launchpadAuction);
+  const token = await viem.getContractAt("LaunchToken", deployment.demoToken);
+
+  const confirmations = chain.isLocal ? 1 : 2;
+  const wait = async (hash: `0x${string}`, label: string) => {
+    await publicClient.waitForTransactionReceipt({ hash, confirmations });
+    const url = explorerTxUrl(chainId, hash);
+    console.log(`  ${label} — ${hash}${url ? `\n     ${url}` : ""}`);
+  };
+
+  const forSale = BigInt(process.env.DEMO_FOR_SALE_TOKENS ?? 100) * 10n ** 18n;
+  const floor = parseEther(process.env.DEMO_FLOOR_ETH ?? "0.0001");
+  const commitMinutes = Number(process.env.COMMIT_MINUTES ?? 30);
+  const revealMinutes = Number(process.env.REVEAL_MINUTES ?? 30);
+
+  // Supply that went unsold in a settled auction is still escrowed in the
+  // contract and belongs to the creator. Pull it back automatically rather than
+  // making the operator mint a fresh token every time a demo round ends unsold.
+  let held = await token.read.balanceOf([me]);
+  if (held < forSale) {
+    const count = Number(await auction.read.auctionCount());
+    for (let id = 0; id < count && held < forSale; id++) {
+      const past = await auction.read.auctionOf([BigInt(id)]);
+      if (!past.settled || past.tokensReclaimed || past.token.toLowerCase() !== String(deployment.demoToken).toLowerCase()) continue;
+      if (past.creator.toLowerCase() !== me.toLowerCase()) continue;
+      const unsold = past.supplyForSale - past.totalAllocated;
+      if (unsold === 0n) continue;
+      console.log(`reclaiming ${formatEther(unsold)} unsold tokens from settled auction #${id}`);
+      await wait(await auction.write.reclaimUnsold([BigInt(id)]), `reclaimed #${id}`);
+      held = await token.read.balanceOf([me]);
+    }
+  }
+
+  if (held < forSale) {
+    throw new Error(
+      `Deployer holds ${formatEther(held)} tokens but the auction needs ${formatEther(forSale)}, ` +
+        `and no settled auction has unsold supply to reclaim. Lower DEMO_FOR_SALE_TOKENS.`,
+    );
+  }
+
+  console.log(`network:  ${chain.displayName} (chain ${chainId})`);
+  console.log(`auction:  ${deployment.launchpadAuction}`);
+  console.log(`token:    ${deployment.demoToken}\n`);
+
+  await wait(await token.write.approve([deployment.launchpadAuction, forSale]), "approved");
+
+  // Chain time, not wall clock — block timestamps drift and a window starting
+  // "now" is already in the past by the time createAuction is mined.
+  const now = (await publicClient.getBlock()).timestamp;
+  const commitStart = now + (chain.isLocal ? 5n : 90n);
+  const commitEnd = commitStart + BigInt(commitMinutes * 60);
+  const revealEnd = commitEnd + BigInt(revealMinutes * 60);
+
+  const before = Number(await auction.read.auctionCount());
+  await wait(
+    await auction.write.createAuction([
+      deployment.demoToken,
+      forSale,
+      floor,
+      commitStart,
+      commitEnd,
+      revealEnd,
+    ]),
+    "auction created",
+  );
+  const auctionId = Number(await auction.read.auctionCount()) - 1;
+
+  console.log(`\nauction #${auctionId}`);
+  console.log(`  supply        ${formatEther(forSale)} tokens`);
+  console.log(`  floor         ${formatEther(floor)} ETH`);
+  console.log(`  commit opens  ${new Date(Number(commitStart) * 1000).toISOString()}`);
+  console.log(`  commit closes ${new Date(Number(commitEnd) * 1000).toISOString()}`);
+  console.log(`  reveal closes ${new Date(Number(revealEnd) * 1000).toISOString()}`);
+
+  deployment.demoAuctionId = auctionId;
+  writeFileSync(path, JSON.stringify(deployment, null, 2) + "\n");
+  console.log(`\nSeed its copy with:  npm run seed -- ${auctionId}`);
+  if (before === auctionId) console.log("(auction count advanced as expected)");
+}
+
+main().catch((err) => {
+  console.error(err instanceof Error ? err.message : err);
+  process.exitCode = 1;
+});

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "obscura": {
+      "command": "node",
+      "args": ["D:/Lauchpad/packages/mcp-server/dist/index.js"]
+    }
+  }
+}

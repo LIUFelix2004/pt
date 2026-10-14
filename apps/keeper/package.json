@@ -1,0 +1,17 @@
+{
+  "name": "@portus/keeper",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx --env-file=../../.env src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "once": "tsx --env-file=../../.env src/index.ts --once",
+    "rewards": "tsx --env-file=../../.env src/rewards/publish.ts",
+    "test": "tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@portus/shared": "*",
+    "viem": "^2.55.0"
+  }
+}

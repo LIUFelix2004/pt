@@ -1,0 +1,77 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { network } from "hardhat";
+import { encodeAbiParameters, keccak256, parseAbiParameters, toHex } from "viem";
+
+const WAD = 10n ** 18n;
+const FLOOR = 10n ** 15n;
+
+async function setup() {
+  const { viem, provider } = await network.connect();
+  const publicClient = await viem.getPublicClient();
+  const [owner, a, b, c] = await viem.getWalletClients();
+  assert(owner && a && b && c);
+  const registry = await viem.deployContract("AgentRegistry", [1n, 1_000n * WAD, 1n]);
+  const auction = await viem.deployContract("LaunchpadAuction", [registry.address]);
+  const supply = 100n * WAD;
+  const token = await viem.deployContract("LaunchToken", ["Batch", "BAT", supply, owner.account.address]);
+  await token.write.approve([auction.address, supply]);
+  const now = (await publicClient.getBlock()).timestamp;
+  await auction.write.createAuction([token.address, supply, FLOOR, now + 100n, now + 200n, now + 300n]);
+  for (const wallet of [a, b, c]) await registry.write.register(["0x"], { account: wallet.account, value: 1n });
+  await provider.request({ method: "evm_setNextBlockTimestamp", params: [Number(now + 100n)] });
+  await provider.request({ method: "evm_mine", params: [] });
+  const bids = [
+    { wallet: a, price: FLOOR * 3n, amount: 40n * WAD, salt: toHex(1n, { size: 32 }) },
+    { wallet: b, price: FLOOR * 2n, amount: 80n * WAD, salt: toHex(2n, { size: 32 }) },
+    { wallet: c, price: FLOOR, amount: 100n * WAD, salt: toHex(3n, { size: 32 }) },
+  ];
+  for (const bid of bids) {
+    const hash = keccak256(encodeAbiParameters(parseAbiParameters("uint256,address,uint256,uint256,bytes32"), [0n, bid.wallet.account.address, bid.price, bid.amount, bid.salt]));
+    await auction.write.commit([0n, hash], { account: bid.wallet.account, value: bid.price * bid.amount / WAD });
+  }
+  await provider.request({ method: "evm_setNextBlockTimestamp", params: [Number(now + 200n)] });
+  await provider.request({ method: "evm_mine", params: [] });
+  for (const bid of bids) await auction.write.reveal([0n, bid.price, bid.amount, bid.salt], { account: bid.wallet.account });
+  await provider.request({ method: "evm_setNextBlockTimestamp", params: [Number(now + 300n)] });
+  await provider.request({ method: "evm_mine", params: [] });
+  return { viem, auction, a, b, c, bids, supply };
+}
+
+describe("batched settlement", () => {
+  it("validates descending order across batches and rejects duplicates", async () => {
+    const f = await setup();
+    await f.viem.assertions.revertWithCustomError(
+      f.auction.write.submitSettlementBatch([0n, [f.b.account.address, f.a.account.address]]),
+      f.auction,
+      "BidsNotSorted",
+    );
+    await f.auction.write.submitSettlementBatch([0n, [f.a.account.address]]);
+    await f.viem.assertions.revertWithCustomError(
+      f.auction.write.submitSettlementBatch([0n, [f.a.account.address]]),
+      f.auction,
+      "BidAlreadyProcessed",
+    );
+    await f.auction.write.submitSettlementBatch([0n, [f.b.account.address]]);
+    await f.auction.write.submitSettlementBatch([0n, [f.c.account.address]]);
+    await f.auction.write.finalizeClearing([0n]);
+    const state = await f.auction.read.auctionOf([0n]);
+    assert.equal(state.clearingPrice, FLOOR * 2n);
+  });
+
+  it("requires every bid in both bounded passes before settlement", async () => {
+    const f = await setup();
+    await f.auction.write.submitSettlementBatch([0n, [f.a.account.address, f.b.account.address]]);
+    await f.viem.assertions.revertWithCustomError(f.auction.write.finalizeClearing([0n]), f.auction, "SettlementIncomplete");
+    await f.auction.write.submitSettlementBatch([0n, [f.c.account.address]]);
+    await f.auction.write.finalizeClearing([0n]);
+    await f.auction.write.submitAllocationBatch([0n, [f.a.account.address]]);
+    await f.viem.assertions.revertWithCustomError(f.auction.write.finalizeSettlement([0n]), f.auction, "SettlementIncomplete");
+    await f.auction.write.submitAllocationBatch([0n, [f.b.account.address, f.c.account.address]]);
+    await f.auction.write.finalizeSettlement([0n]);
+    assert.equal(await f.auction.read.phaseOf([0n]), 4);
+    assert.equal(await f.auction.read.allocationOf([0n, f.a.account.address]), 40n * WAD);
+    assert.equal(await f.auction.read.allocationOf([0n, f.b.account.address]), 60n * WAD);
+    assert.equal(await f.auction.read.allocationOf([0n, f.c.account.address]), 0n);
+  });
+});

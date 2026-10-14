@@ -1,0 +1,33 @@
+{
+  "chainId": 1,
+  "network": "ethereum",
+  "factory": "0xa055b028ff09083a72bd4fd8bbc503fa3ddef084",
+  "locker": "0x4A6a8a6dF6A8F00aAd091Aa57f9Cd0a917031bEA",
+  "feeSplitter": "0x0fdd1494b22654c78De74BA685238eFDCd64205a",
+  "distributor": "0xA770bD974A159319cd9a44A9265a4Ad87293C71A",
+  "flywheel": "0xD087E557b09c91ed7FFADff87A84962eF806421d",
+  "quoteAdmin": "0xF124778D183dd498074619Bfa895670C629867D4",
+  "ecosystem": "0xF124778D183dd498074619Bfa895670C629867D4",
+  "rootPublisher": "0xF124778D183dd498074619Bfa895670C629867D4",
+  "quoteAssets": [
+    {
+      "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+      "symbol": "WETH",
+      "decimals": 18,
+      "freezable": false
+    }
+  ],
+  "libraries": {
+    "TokenDeployer": "0xa4e3e0ec7830c29a81a94deb8680af17332b3bf9",
+    "PoolDeployer": "0x70d6915dba9d9a0632195c94d9c742fa95613c60",
+    "SaleDeployer": "0x75c2114b4ed3a7935b619b21c19002809441f13e",
+    "TreasuryDeployer": "0xf5c322d961bd1abb9823cfdf04e641a7a8b0b920",
+    "MintTokenDeployer": "0x22c46a0abdb720d720764e2e5a63abdbf3ee0200",
+    "TaxPoolDeployer": "0xb75ac85c79c34137509b5030620c13fad9bc69d3",
+    "EmissionDeployer": "0x35d57cb885a3e0b1e2e6820d07d1c1903e8b663c"
+  },
+  "deployer": "0xf124778d183dd498074619bfa895670c629867d4",
+  "deployedAt": "2026-10-12T07:47:09.499Z",
+  "startBlock": 26174978,
+  "gitCommit": null
+}

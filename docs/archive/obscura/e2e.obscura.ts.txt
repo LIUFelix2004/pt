@@ -1,0 +1,183 @@
+/**
+ * End-to-end exercise of the auction, asserting the settlement maths.
+ *
+ * Scenario (deliberately oversubscribed, to test both the uniform clearing
+ * price and pro-rata allocation at the margin):
+ *
+ *   supply           150,000 tokens
+ *   bidder A         100,000 @ 0.003 ETH   -> above clearing, fills completely
+ *   bidder B         100,000 @ 0.002 ETH   -> at clearing, pro-rated to 50,000
+ *   bidder C         100,000 @ 0.001 ETH   -> below clearing, wins nothing
+ *
+ * D(0.003) = 100,000 < 150,000, so 0.003 does not clear.
+ * D(0.002) = 200,000 >= 150,000, and the next price up does not clear,
+ * therefore the clearing price is 0.002 ETH.
+ *
+ * Run with: npx hardhat run scripts/e2e.ts --network localhost
+ */
+import { network } from "hardhat";
+import { encodeAbiParameters, keccak256, parseAbiParameters, toHex, formatEther } from "viem";
+
+const WAD = 10n ** 18n;
+const tokens = (n: bigint) => n * WAD;
+const eth = (n: string) => BigInt(Math.round(Number(n) * 1e6)) * 10n ** 12n;
+
+let failures = 0;
+function check(label: string, actual: bigint, expected: bigint) {
+  const ok = actual === expected;
+  if (!ok) failures++;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${label}`);
+  if (!ok) console.log(`        expected ${expected}\n        actual   ${actual}`);
+}
+
+async function main() {
+  const { viem, provider } = await network.connect();
+  const publicClient = await viem.getPublicClient();
+  const wallets = await viem.getWalletClients();
+
+  const [deployer, a, b, c] = wallets;
+  if (!deployer || !a || !b || !c) throw new Error("need at least 4 funded accounts");
+
+  const mine = () => provider.request({ method: "evm_mine", params: [] });
+  const jump = async (seconds: number) => {
+    await provider.request({ method: "evm_increaseTime", params: [seconds] });
+    await mine();
+  };
+
+  console.log("--- deploying an isolated auction for the test ---");
+  const registry = await viem.deployContract("AgentRegistry", [
+    eth("0.01"),
+    tokens(100_000n),
+    86_400n,
+  ]);
+  const auction = await viem.deployContract("LaunchpadAuction", [registry.address]);
+
+  const supply = tokens(150_000n);
+  const token = await viem.deployContract("LaunchToken", [
+    "E2E Token",
+    "E2E",
+    supply,
+    deployer.account.address,
+  ]);
+  await token.write.approve([auction.address, supply]);
+
+  const now = (await publicClient.getBlock()).timestamp;
+  const commitStart = now + 5n;
+  const commitEnd = now + 1_000n;
+  const revealEnd = now + 2_000n;
+  const floorPrice = eth("0.001");
+
+  await auction.write.createAuction([
+    token.address,
+    supply,
+    floorPrice,
+    commitStart,
+    commitEnd,
+    revealEnd,
+  ]);
+  const auctionId = 0n;
+  console.log(`auction #0 created, supply ${formatEther(supply)} tokens`);
+
+  console.log("\n--- registering participants ---");
+  for (const w of [a, b, c]) {
+    await registry.write.register(["0x"], { account: w.account, value: eth("0.01") });
+  }
+  console.log("3 participants staked");
+
+  await jump(10); // cross into the commit window
+
+  const bids = [
+    { name: "A", wallet: a, price: eth("0.003"), amount: tokens(100_000n) },
+    { name: "B", wallet: b, price: eth("0.002"), amount: tokens(100_000n) },
+    { name: "C", wallet: c, price: eth("0.001"), amount: tokens(100_000n) },
+  ];
+
+  console.log("\n--- commit phase ---");
+  for (const bid of bids) {
+    const salt = toHex(crypto.getRandomValues(new Uint8Array(32)));
+    const commitment = keccak256(
+      encodeAbiParameters(parseAbiParameters("uint256, address, uint256, uint256, bytes32"), [
+        auctionId,
+        bid.wallet.account.address,
+        bid.price,
+        bid.amount,
+        salt,
+      ]),
+    );
+    const deposit = (bid.amount * bid.price) / WAD;
+    await auction.write.commit([auctionId, commitment], {
+      account: bid.wallet.account,
+      value: deposit,
+    });
+    Object.assign(bid, { salt, deposit });
+    console.log(
+      `  ${bid.name} sealed ${formatEther(bid.amount)} @ ${formatEther(bid.price)} ETH ` +
+        `(collateral ${formatEther(deposit)} ETH)`,
+    );
+  }
+
+  await jump(1_200); // into the reveal window
+
+  console.log("\n--- reveal phase ---");
+  for (const bid of bids as Array<(typeof bids)[number] & { salt: `0x${string}` }>) {
+    await auction.write.reveal([auctionId, bid.price, bid.amount, bid.salt], {
+      account: bid.wallet.account,
+    });
+    console.log(`  ${bid.name} revealed`);
+  }
+
+  await jump(1_200); // past reveal end, into SETTLING
+
+  console.log("\n--- settlement ---");
+  const expectedClearing = eth("0.002");
+  const sortedBidders = bids
+    .slice()
+    .sort((x, y) => (x.price > y.price ? -1 : x.price < y.price ? 1 : 0))
+    .map((bid) => bid.wallet.account.address);
+  await auction.write.submitSettlementBatch([auctionId, sortedBidders]);
+  await auction.write.finalizeClearing([auctionId]);
+  await auction.write.submitAllocationBatch([auctionId, sortedBidders]);
+  await auction.write.finalizeSettlement([auctionId]);
+
+  const state = await auction.read.auctionOf([auctionId]);
+  check("clearing price is 0.002 ETH", state.clearingPrice, expectedClearing);
+  check("total allocated equals supply", state.totalAllocated, supply);
+
+  console.log("\n--- allocations ---");
+  const allocA = await auction.read.allocationOf([auctionId, a.account.address]);
+  const allocB = await auction.read.allocationOf([auctionId, b.account.address]);
+  const allocC = await auction.read.allocationOf([auctionId, c.account.address]);
+
+  check("A above clearing fills completely", allocA, tokens(100_000n));
+  check("B at clearing is pro-rated to 50,000", allocB, tokens(50_000n));
+  check("C below clearing wins nothing", allocC, 0n);
+
+  console.log("\n--- claims ---");
+  for (const bid of bids) {
+    await auction.write.claim([auctionId], { account: bid.wallet.account });
+  }
+
+  const balA = await token.read.balanceOf([a.account.address]);
+  const balB = await token.read.balanceOf([b.account.address]);
+  const balC = await token.read.balanceOf([c.account.address]);
+  check("A received its tokens", balA, tokens(100_000n));
+  check("B received its pro-rated tokens", balB, tokens(50_000n));
+  check("C received no tokens", balC, 0n);
+
+  // A bid above the clearing price still pays only the clearing price.
+  // That is the property that makes bidding your true maximum safe.
+  const proceeds = (await auction.read.auctionOf([auctionId])).proceeds;
+  check("proceeds equal supply x clearing price", proceeds, (supply * expectedClearing) / WAD);
+
+  console.log(
+    failures === 0
+      ? "\nALL CHECKS PASSED"
+      : `\n${failures} CHECK(S) FAILED`,
+  );
+  if (failures > 0) process.exitCode = 1;
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});

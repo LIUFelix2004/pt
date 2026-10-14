@@ -1,0 +1,269 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { network } from "hardhat";
+import {
+  encodeAbiParameters,
+  keccak256,
+  parseAbiParameters,
+  toHex,
+  type Address,
+  type Hex,
+} from "viem";
+
+const WAD = 10n ** 18n;
+const token = (n: bigint) => n * WAD;
+const STAKE = 10n ** 16n;
+const FLOOR = 10n ** 15n;
+const QUOTA = token(1_000n);
+
+async function fixture(supply = token(100n)) {
+  const { viem, provider } = await network.connect();
+  const publicClient = await viem.getPublicClient();
+  const wallets = await viem.getWalletClients();
+  const [owner, a, b, c, outsider] = wallets;
+  assert(owner && a && b && c && outsider);
+  const registry = await viem.deployContract("AgentRegistry", [STAKE, QUOTA, 3600n]);
+  const auction = await viem.deployContract("LaunchpadAuction", [registry.address]);
+  const saleToken = await viem.deployContract("LaunchToken", ["Test", "TST", supply, owner.account.address]);
+  await saleToken.write.approve([auction.address, supply]);
+  const now = (await publicClient.getBlock()).timestamp;
+  const times = { start: now + 10n, commitEnd: now + 110n, revealEnd: now + 210n };
+  await auction.write.createAuction([saleToken.address, supply, FLOOR, times.start, times.commitEnd, times.revealEnd]);
+  const jumpTo = async (timestamp: bigint) => {
+    await provider.request({ method: "evm_setNextBlockTimestamp", params: [Number(timestamp)] });
+    await provider.request({ method: "evm_mine", params: [] });
+  };
+  const register = async (wallet: typeof a, proof: Hex = "0x") =>
+    registry.write.register([proof], { account: wallet.account, value: STAKE });
+  const commitment = (bidder: Address, price: bigint, amount: bigint, salt: Hex) =>
+    keccak256(encodeAbiParameters(parseAbiParameters("uint256,address,uint256,uint256,bytes32"), [0n, bidder, price, amount, salt]));
+  const commit = async (wallet: typeof a, price: bigint, amount: bigint, salt = toHex(crypto.getRandomValues(new Uint8Array(32)))) => {
+    const deposit = (price * amount) / WAD;
+    await auction.write.commit([0n, commitment(wallet.account.address, price, amount, salt)], { account: wallet.account, value: deposit });
+    return { wallet, price, amount, salt, deposit };
+  };
+  return { viem, provider, publicClient, owner, a, b, c, outsider, registry, auction, saleToken, supply, times, jumpTo, register, commit, commitment };
+}
+
+async function expectCustom(viem: Awaited<ReturnType<typeof network.connect>>["viem"], promise: Promise<unknown>, contract: any, error: string) {
+  await viem.assertions.revertWithCustomError(promise as Promise<`0x${string}`>, contract, error as never);
+}
+
+describe("AgentRegistry", () => {
+  it("rejects incorrect stake and duplicate registration", async () => {
+    const f = await fixture();
+    await expectCustom(f.viem, f.registry.write.register(["0x"], { account: f.a.account, value: STAKE - 1n }), f.registry, "IncorrectStake");
+    await f.register(f.a);
+    await expectCustom(f.viem, f.register(f.a), f.registry, "AlreadyRegistered");
+  });
+
+  it("enforces exit cooldown and removes quota while exiting", async () => {
+    const f = await fixture();
+    await f.register(f.a);
+    assert.equal(await f.registry.read.quotaOf([f.a.account.address]), QUOTA);
+    await f.registry.write.requestExit({ account: f.a.account });
+    assert.equal(await f.registry.read.isRegistered([f.a.account.address]), false);
+    assert.equal(await f.registry.read.quotaOf([f.a.account.address]), 0n);
+    await expectCustom(f.viem, f.registry.write.withdrawStake({ account: f.a.account }), f.registry, "CooldownActive");
+    const participant = await f.registry.read.participantOf([f.a.account.address]);
+    await f.jumpTo(participant.exitRequestedAt + 3600n);
+    await f.registry.write.withdrawStake({ account: f.a.account });
+    assert.equal((await f.registry.read.participantOf([f.a.account.address])).registeredAt, 0n);
+  });
+
+  it("rejects invalid exit operations and lets the owner update parameters", async () => {
+    const f = await fixture();
+    await expectCustom(f.viem, f.registry.write.requestExit({ account: f.a.account }), f.registry, "NotRegistered");
+    await expectCustom(f.viem, f.registry.write.withdrawStake({ account: f.a.account }), f.registry, "NotRegistered");
+    await f.register(f.a);
+    await expectCustom(f.viem, f.registry.write.withdrawStake({ account: f.a.account }), f.registry, "ExitNotRequested");
+    await f.registry.write.requestExit({ account: f.a.account });
+    await expectCustom(f.viem, f.registry.write.requestExit({ account: f.a.account }), f.registry, "ExitInProgress");
+    await f.registry.write.setParameters([2n, 3n, 4n]);
+    assert.equal(await f.registry.read.stakeRequirement(), 2n);
+    assert.equal(await f.registry.read.defaultQuota(), 3n);
+    assert.equal(await f.registry.read.exitCooldown(), 4n);
+  });
+
+  it("applies owner quota overrides per participant", async () => {
+    const f = await fixture();
+    await f.register(f.a);
+    await f.registry.write.setQuotaOverride([f.a.account.address, 7n]);
+    assert.equal(await f.registry.read.quotaOf([f.a.account.address]), 7n);
+    await expectCustom(f.viem, f.registry.write.setQuotaOverride([f.a.account.address, 9n], { account: f.outsider.account }), f.registry, "OwnableUnauthorizedAccount");
+  });
+
+  it("uses an optional personhood verifier without changing address-bound quota", async () => {
+    const f = await fixture();
+    const verifier = await f.viem.deployContract("MockPersonhoodVerifier", []);
+    await f.registry.write.setPersonhoodVerifier([verifier.address]);
+    await expectCustom(f.viem, f.registry.write.register({ account: f.a.account, value: STAKE }), f.registry, "PersonhoodProofRequired");
+    await expectCustom(f.viem, f.register(f.a, "0x00"), f.registry, "PersonhoodVerificationFailed");
+    await verifier.write.setVerified([f.a.account.address, true]);
+    await f.register(f.a, "0x1234");
+    assert.equal(await f.registry.read.quotaOf([f.a.account.address]), QUOTA);
+    assert.equal((await f.registry.read.personhoodVerifier()).toLowerCase(), verifier.address.toLowerCase());
+  });
+});
+
+describe("LaunchpadAuction phases and bidding", () => {
+  it("covers lifecycle views and rejects invalid auction parameters", async () => {
+    const f = await fixture();
+    assert.equal(await f.auction.read.phaseOf([99n]), 0);
+    assert.equal((await f.auction.read.bidOf([0n, f.a.account.address])).deposit, 0n);
+    assert.equal(await f.auction.read.revealedBidderCount([0n]), 0n);
+    const now = (await f.publicClient.getBlock()).timestamp;
+    await expectCustom(f.viem, f.auction.write.createAuction([f.saleToken.address, 0n, FLOOR, now + 1n, now + 2n, now + 3n]), f.auction, "ZeroAmount");
+    await expectCustom(f.viem, f.auction.write.createAuction([f.saleToken.address, 1n, FLOOR, now + 2n, now + 2n, now + 3n]), f.auction, "BadWindow");
+  });
+
+  it("rejects commit outside COMMIT and settlement outside SETTLING", async () => {
+    const f = await fixture();
+    await expectCustom(f.viem, f.auction.write.commit([0n, toHex(1n, { size: 32 })], { account: f.a.account, value: 1n }), f.auction, "WrongPhase");
+    await expectCustom(f.viem, f.auction.write.settle([0n, FLOOR]), f.auction, "WrongPhase");
+  });
+
+  it("rejects reveal without commitment and claim/admin actions before settlement", async () => {
+    const f = await fixture();
+    await f.jumpTo(f.times.commitEnd);
+    await expectCustom(f.viem, f.auction.write.reveal([0n, FLOOR, 1n, toHex(1n, { size: 32 })], { account: f.a.account }), f.auction, "NoCommitment");
+    await expectCustom(f.viem, f.auction.write.claim([0n], { account: f.a.account }), f.auction, "NotSettled");
+    await expectCustom(f.viem, f.auction.write.sweepForfeited([0n, []]), f.auction, "NotSettled");
+    await expectCustom(f.viem, f.auction.write.withdrawProceeds([0n]), f.auction, "NotSettled");
+    await expectCustom(f.viem, f.auction.write.reclaimUnsold([0n]), f.auction, "NotSettled");
+  });
+
+  it("rejects unregistered, duplicate, and zero-value commits", async () => {
+    const f = await fixture();
+    await f.jumpTo(f.times.start);
+    const hash = toHex(1n, { size: 32 });
+    await expectCustom(f.viem, f.auction.write.commit([0n, hash], { account: f.a.account, value: 1n }), f.auction, "NotRegistered");
+    await f.register(f.a);
+    await expectCustom(f.viem, f.auction.write.commit([0n, hash], { account: f.a.account, value: 0n }), f.auction, "ZeroAmount");
+    await f.auction.write.commit([0n, hash], { account: f.a.account, value: 1n });
+    await expectCustom(f.viem, f.auction.write.commit([0n, hash], { account: f.a.account, value: 1n }), f.auction, "AlreadyCommitted");
+  });
+
+  it("rejects all invalid reveal variants and duplicate reveal", async () => {
+    const cases: Array<[string, bigint, bigint, bigint, Hex, string]> = [
+      ["bad hash", FLOOR, token(1n), FLOOR, toHex(999n, { size: 32 }), "BadReveal"],
+      ["below floor", FLOOR - 1n, token(1n), FLOOR - 1n, toHex(2n, { size: 32 }), "BelowFloor"],
+      ["zero amount", FLOOR, 0n, 1n, toHex(3n, { size: 32 }), "ZeroAmount"],
+      ["over quota", FLOOR, QUOTA + 1n, FLOOR * (QUOTA + 1n) / WAD, toHex(4n, { size: 32 }), "OverQuota"],
+      ["low deposit", FLOOR * 2n, token(2n), 1n, toHex(5n, { size: 32 }), "DepositTooSmall"],
+    ];
+    for (const [, price, amount, deposit, salt, error] of cases) {
+      const f = await fixture();
+      await f.register(f.a);
+      await f.jumpTo(f.times.start);
+      const committedSalt = error === "BadReveal" ? toHex(1n, { size: 32 }) : salt;
+      await f.auction.write.commit([0n, f.commitment(f.a.account.address, price, amount, committedSalt)], { account: f.a.account, value: deposit });
+      await f.jumpTo(f.times.commitEnd);
+      await expectCustom(f.viem, f.auction.write.reveal([0n, price, amount, salt], { account: f.a.account }), f.auction, error);
+    }
+    const f = await fixture();
+    await f.register(f.a); await f.jumpTo(f.times.start);
+    const bid = await f.commit(f.a, FLOOR, token(1n));
+    await f.jumpTo(f.times.commitEnd);
+    await f.auction.write.reveal([0n, bid.price, bid.amount, bid.salt], { account: f.a.account });
+    await expectCustom(f.viem, f.auction.write.reveal([0n, bid.price, bid.amount, bid.salt], { account: f.a.account }), f.auction, "AlreadyRevealed");
+  });
+});
+
+describe("LaunchpadAuction settlement and funds", () => {
+  async function prepared(supply: bigint, bids: Array<{ price: bigint; amount: bigint }>) {
+    const f = await fixture(supply);
+    const wallets = [f.a, f.b, f.c];
+    for (let i = 0; i < bids.length; i++) await f.register(wallets[i]!);
+    await f.jumpTo(f.times.start);
+    const sealed = [];
+    for (let i = 0; i < bids.length; i++) sealed.push(await f.commit(wallets[i]!, bids[i]!.price, bids[i]!.amount));
+    await f.jumpTo(f.times.commitEnd);
+    for (const bid of sealed) await f.auction.write.reveal([0n, bid.price, bid.amount, bid.salt], { account: bid.wallet.account });
+    await f.jumpTo(f.times.revealEnd);
+    return { ...f, sealed };
+  }
+
+  it("accepts only floor for undersubscription", async () => {
+    const f = await prepared(token(100n), [{ price: FLOOR * 2n, amount: token(10n) }]);
+    await expectCustom(f.viem, f.auction.write.settle([0n, FLOOR * 2n]), f.auction, "InvalidClearingPrice");
+    await f.auction.write.settle([0n, FLOOR]);
+    assert.equal((await f.auction.read.auctionOf([0n])).totalAllocated, token(10n));
+  });
+
+  it("rejects high, low, and non-bid clearing prices", async () => {
+    for (const bad of [FLOOR * 3n, FLOOR, FLOOR + FLOOR / 2n, FLOOR - 1n]) {
+      const f = await prepared(token(100n), [
+        { price: FLOOR * 3n, amount: token(40n) },
+        { price: FLOOR * 2n, amount: token(80n) },
+        { price: FLOOR, amount: token(100n) },
+      ]);
+      await expectCustom(f.viem, f.auction.write.settle([0n, bad]), f.auction, "InvalidClearingPrice");
+    }
+  });
+
+  it("handles one bidder and all bids exactly at clearing", async () => {
+    const one = await prepared(token(100n), [{ price: FLOOR * 2n, amount: token(100n) }]);
+    await one.auction.write.settle([0n, FLOOR * 2n]);
+    assert.equal(await one.auction.read.allocationOf([0n, one.a.account.address]), token(100n));
+    const equal = await prepared(token(100n), [
+      { price: FLOOR * 2n, amount: token(60n) },
+      { price: FLOOR * 2n, amount: token(60n) },
+    ]);
+    await equal.auction.write.settle([0n, FLOOR * 2n]);
+    assert.equal(await equal.auction.read.allocationOf([0n, equal.a.account.address]), token(50n));
+    assert.equal(await equal.auction.read.allocationOf([0n, equal.b.account.address]), token(50n));
+  });
+
+  it("rounds allocations down and makes token dust reclaimable", async () => {
+    const f = await prepared(2n, [
+      { price: WAD, amount: 1n },
+      { price: WAD, amount: 1n },
+      { price: WAD, amount: 1n },
+    ]);
+    await f.auction.write.settle([0n, WAD]);
+    assert.equal(await f.auction.read.allocationOf([0n, f.a.account.address]), 0n);
+    assert.equal(await f.auction.read.allocationOf([0n, f.b.account.address]), 0n);
+    assert.equal((await f.auction.read.auctionOf([0n])).totalAllocated, 0n);
+    await f.auction.write.reclaimUnsold([0n]);
+    assert.equal(await f.saleToken.read.balanceOf([f.owner.account.address]), 2n);
+  });
+
+  it("enforces claim, sweep, withdraw, and reclaim permissions and idempotence", async () => {
+    const f = await fixture(token(10n));
+    await f.register(f.a); await f.register(f.b); await f.jumpTo(f.times.start);
+    const revealed = await f.commit(f.a, FLOOR, token(5n));
+    await f.commit(f.b, FLOOR, token(1n));
+    await f.jumpTo(f.times.commitEnd);
+    await f.auction.write.reveal([0n, revealed.price, revealed.amount, revealed.salt], { account: f.a.account });
+    await f.jumpTo(f.times.revealEnd);
+    await f.auction.write.settle([0n, FLOOR]);
+    await expectCustom(f.viem, f.auction.write.claim([0n], { account: f.b.account }), f.auction, "BadReveal");
+    await f.auction.write.claim([0n], { account: f.a.account });
+    await expectCustom(f.viem, f.auction.write.claim([0n], { account: f.a.account }), f.auction, "AlreadyClaimed");
+    await expectCustom(f.viem, f.auction.write.sweepForfeited([0n, [f.b.account.address]], { account: f.outsider.account }), f.auction, "NotCreator");
+    await f.auction.write.sweepForfeited([0n, [f.b.account.address]]);
+    const proceeds = (await f.auction.read.auctionOf([0n])).proceeds;
+    await f.auction.write.sweepForfeited([0n, [f.b.account.address]]);
+    assert.equal((await f.auction.read.auctionOf([0n])).proceeds, proceeds);
+    await expectCustom(f.viem, f.auction.write.withdrawProceeds([0n], { account: f.outsider.account }), f.auction, "NotCreator");
+    await f.auction.write.withdrawProceeds([0n]);
+    await f.auction.write.withdrawProceeds([0n]);
+    await expectCustom(f.viem, f.auction.write.reclaimUnsold([0n], { account: f.outsider.account }), f.auction, "NotCreator");
+    await f.auction.write.reclaimUnsold([0n]);
+    await expectCustom(f.viem, f.auction.write.reclaimUnsold([0n]), f.auction, "AlreadyClaimed");
+  });
+
+  it("fully refunds a losing revealed bid", async () => {
+    const f = await prepared(token(5n), [
+      { price: FLOOR * 2n, amount: token(5n) },
+      { price: FLOOR, amount: token(5n) },
+    ]);
+    await f.auction.write.settle([0n, FLOOR * 2n]);
+    const before = await f.publicClient.getBalance({ address: f.b.account.address });
+    const hash = await f.auction.write.claim([0n], { account: f.b.account });
+    const receipt = await f.publicClient.waitForTransactionReceipt({ hash });
+    const after = await f.publicClient.getBalance({ address: f.b.account.address });
+    assert.equal(after + receipt.gasUsed * receipt.effectiveGasPrice - before, f.sealed[1]!.deposit);
+  });
+});

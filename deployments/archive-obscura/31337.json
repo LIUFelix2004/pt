@@ -1,0 +1,11 @@
+{
+  "chainId": 31337,
+  "network": "localhost",
+  "agentRegistry": "0x9a9f2ccfde556a7e9ff0848998aa4a0cfd8863ae",
+  "personhoodVerifier": "0x0000000000000000000000000000000000000000",
+  "launchpadAuction": "0x68b1d87f95878fe05b998f19b66f4baba5de1aed",
+  "deployer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+  "deployedAt": "2026-08-23T08:13:35.391Z",
+  "demoToken": "0x3aa5ebb10dc797cac828524e59a333d0a371443c",
+  "demoAuctionId": 0
+}

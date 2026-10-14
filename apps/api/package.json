@@ -1,0 +1,21 @@
+{
+  "name": "@portus/api",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch --env-file=../../.env src/index.ts",
+    "start": "node --env-file=../../.env dist/index.js",
+    "seed": "tsx --env-file=../../.env src/seed.ts",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@portus/shared": "*",
+    "@hono/node-server": "^1.19.9",
+    "hono": "^4.13.0",
+    "viem": "^2.55.0",
+    "zod": "^4.4.0"
+  }
+}

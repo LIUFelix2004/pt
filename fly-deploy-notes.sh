@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Reference only — run after: fly auth login, payment on file, secrets ready.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT"
+
+echo "1) Create apps (once):"
+echo "   fly apps create portus-api"
+echo "   fly apps create portus-keeper"
+echo "2) Volume for API SQLite+rewards (once):"
+echo "   fly volumes create portus_data --region nrt --size 3 -a portus-api"
+echo "3) Secrets — paste values yourself (never commit):"
+echo "   fly secrets set -a portus-api \\"
+echo "     CHAIN_ID=1 RPC_URL=... \\"
+echo "     PORTUS_FACTORY_ADDRESS=... PORTUS_LOCKER_ADDRESS=... \\"
+echo "     PORTUS_FEE_SPLITTER_ADDRESS=... PORTUS_DISTRIBUTOR_ADDRESS=... \\"
+echo "     PORTUS_FLYWHEEL_ADDRESS=... \\"
+echo "     DATABASE_PATH=/data/portus-mainnet.sqlite REWARDS_DIR=/data/rewards API_PORT=8787"
+echo "   fly secrets set -a portus-keeper \\"
+echo "     CHAIN_ID=1 RPC_URL=... KEEPER_PRIVATE_KEY=... \\"
+echo "     PORTUS_FACTORY_ADDRESS=... PORTUS_LOCKER_ADDRESS=... \\"
+echo "     PORTUS_FEE_SPLITTER_ADDRESS=... PORTUS_DISTRIBUTOR_ADDRESS=... \\"
+echo "     PORTUS_FLYWHEEL_ADDRESS=... KEEPER_INTERVAL_SECONDS=30"
+echo "4) Deploy API then keeper:"
+echo "   fly deploy -a portus-api -c fly.api.toml"
+echo "   fly deploy -a portus-keeper -c fly.keeper.toml --ha=false"
+echo "5) Health: curl -sS https://portus-api.fly.dev/health"
+echo "6) Do NOT change Pages PORTUS_API_ORIGIN until health+launches OK and user confirms cutover."

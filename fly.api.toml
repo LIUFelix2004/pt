@@ -1,0 +1,42 @@
+# fly apps create portus-api
+# fly volumes create portus_data --region nrt --size 3 -a portus-api
+# fly secrets set -a portus-api ...
+# fly deploy -a portus-api -c fly.api.toml
+
+app = "portus-api"
+primary_region = "nrt"
+
+[build]
+  dockerfile = "Dockerfile"
+  [build.args]
+    TARGET = "api"
+
+[env]
+  API_PORT = "8787"
+  DATABASE_PATH = "/data/portus-mainnet.sqlite"
+  REWARDS_DIR = "/data/rewards"
+  CHAIN_ID = "1"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "60s"
+    method = "GET"
+    path = "/health"
+
+[mounts]
+  source = "portus_data"
+  destination = "/data"
+  initial_size = "3gb"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

@@ -1,0 +1,5 @@
+API_PID=42256
+KEEPER_PID=32508
+CLOUDFLARED_PID=27744
+API_URL=https://please-shelter-accepting-por.trycloudflare.com
+STARTED_AT=2026-10-12T16:01:42.6144262+08:00

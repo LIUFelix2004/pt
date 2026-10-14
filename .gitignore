@@ -1,0 +1,55 @@
+node_modules/
+dist/
+.next/
+out/
+*.tsbuildinfo
+
+# secrets — never commit
+.env
+.env.local
+.env.*.local
+*.key
+keystore/
+
+# local agent state — CONTAINS BID SALTS. Committing these lets anyone
+# open your sealed bids before the reveal window.
+.launchpad/
+contracts/.bids/
+**/data/*.db
+**/data/*.db-*
+
+# hardhat
+contracts/artifacts/
+contracts/cache/
+contracts/types/
+
+# coverage
+contracts/coverage/
+
+# offline signing requests — contain transaction payloads
+.sign-requests/
+
+# Frozen packages never ship build output
+frozen/**/dist/
+# Generated per launch by new-launch / demo-states
+deployments/whitelists/
+
+# Reward epoch datasets written by the local publisher (production hosts these publicly)
+/data/
+
+# added 2026-10-14 push hardening
+.env.*
+!.env.example
+*.log
+logs/
+*backup*/
+*-backup
+*.tgz
+.codex/
+.agent-sync*/
+_*.txt
+.wrangler/
+*PRIVATE_KEY*
+*privateKey*
+*private-key*
+*.pem

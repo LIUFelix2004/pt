@@ -1,0 +1,209 @@
+"use client";
+
+import { useState } from "react";
+import { useTranslations } from "next-intl";
+import { useAccount, useConnect, useDisconnect, usePublicClient, useSignTypedData, useWriteContract } from "wagmi";
+import { injected } from "wagmi/connectors";
+import { encodeAbiParameters, erc20Abi, isAddress, keccak256, parseAbiParameters, parseEther, parseEventLogs, parseUnits, toHex } from "viem";
+
+const auctionAddress = (process.env.NEXT_PUBLIC_OBSCURA_AUCTION_ADDRESS ?? process.env.NEXT_PUBLIC_LAUNCHPAD_AUCTION_ADDRESS ?? "") as `0x${string}`;
+const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? 31337);
+const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8787";
+
+/** Minimal ABI keeps the browser bundle small and gives viem exact argument types. */
+const CREATE_ABI = [
+  {
+    type: "function",
+    name: "createAuction",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "supplyForSale", type: "uint256" },
+      { name: "floorPrice", type: "uint256" },
+      { name: "commitStart", type: "uint64" },
+      { name: "commitEnd", type: "uint64" },
+      { name: "revealEnd", type: "uint64" },
+    ],
+    outputs: [{ name: "auctionId", type: "uint256" }],
+  },
+  {
+    type: "event",
+    name: "AuctionCreated",
+    inputs: [
+      { name: "auctionId", type: "uint256", indexed: true },
+      { name: "creator", type: "address", indexed: true },
+      { name: "token", type: "address", indexed: true },
+      { name: "supplyForSale", type: "uint256", indexed: false },
+      { name: "floorPrice", type: "uint256", indexed: false },
+      { name: "commitStart", type: "uint64", indexed: false },
+      { name: "commitEnd", type: "uint64", indexed: false },
+      { name: "revealEnd", type: "uint64", indexed: false },
+    ],
+  },
+] as const;
+
+const COPY_AUTH_TYPES = {
+  LaunchCopyAuthorization: [
+    { name: "auctionId", type: "uint256" },
+    { name: "copyHash", type: "bytes32" },
+    { name: "nonce", type: "bytes32" },
+  ],
+} as const;
+
+/**
+ * EIP-712 domain. This string is part of the signature and must stay byte-identical
+ * to apps/api/src/auth.ts — renaming it on one side only makes every copy
+ * signature fail verification.
+ */
+const copyDomain = (contract: `0x${string}`) => ({ name: "Agent Launchpad Copy", version: "1", chainId, verifyingContract: contract }) as const;
+
+const FIELD =
+  "mt-1.5 w-full rounded-md border border-line bg-[#080b11] px-3 py-2 font-mono text-sm text-fg outline-none transition-colors placeholder:text-fg-muted/60 focus:border-cyan/60 focus:ring-1 focus:ring-cyan/40";
+const LABEL = "block text-[11px] font-medium tracking-[0.12em] text-fg-muted uppercase";
+const SUBMIT =
+  "glow-cyan mt-1 w-full rounded-md bg-cyan px-4 py-2.5 font-mono text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90";
+
+export function CreateAuctionForm() {
+  const t = useTranslations("create");
+  const { address, isConnected } = useAccount();
+  const { connect } = useConnect(); const { disconnect } = useDisconnect();
+  const publicClient = usePublicClient();
+  const { writeContractAsync } = useWriteContract(); const { signTypedDataAsync } = useSignTypedData();
+  const [status, setStatus] = useState<string | null>(null);
+  const [auctionId, setAuctionId] = useState<number | null>(null);
+
+  async function create(form: FormData) {
+    try {
+      const token = String(form.get("token")).toLowerCase() as `0x${string}`;
+      if (!isAddress(token)) throw new Error("sale token address is not a valid 0x address");
+      if (!isAddress(auctionAddress)) throw new Error("auction contract not configured (NEXT_PUBLIC_OBSCURA_AUCTION_ADDRESS)");
+      if (!publicClient) throw new Error("chain RPC unavailable");
+      const supply = parseUnits(String(form.get("supply")), 18);
+      const floor = parseEther(String(form.get("floor")));
+      const start = BigInt(Math.floor(new Date(String(form.get("start"))).getTime() / 1000));
+      const commitEnd = start + BigInt(Number(form.get("commitMinutes")) * 60);
+      const revealEnd = commitEnd + BigInt(Number(form.get("revealMinutes")) * 60);
+      setStatus("01 / Approve token escrow in your wallet…");
+      const approveHash = await writeContractAsync({ address: token, abi: erc20Abi, functionName: "approve", args: [auctionAddress, supply] });
+      const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      if (approveReceipt.status !== "success") throw new Error("token approval reverted");
+      setStatus("02 / Create the auction…");
+      const createHash = await writeContractAsync({ address: auctionAddress, abi: CREATE_ABI, functionName: "createAuction", args: [token, supply, floor, start, commitEnd, revealEnd] });
+      const createReceipt = await publicClient.waitForTransactionReceipt({ hash: createHash });
+      if (createReceipt.status !== "success") throw new Error("createAuction reverted");
+      const created = parseEventLogs({ abi: CREATE_ABI, logs: createReceipt.logs, eventName: "AuctionCreated" });
+      const id = Number(created[0]?.args.auctionId ?? 0n);
+      if (!Number.isInteger(id) || id < 0) throw new Error("could not decode created auction id");
+      setAuctionId(id); setStatus(`Auction created. Sign copy for auction #${id}.`);
+    } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+  }
+
+  async function submitCopy(form: FormData) {
+    if (auctionId === null || !address) return;
+    try {
+      const copy = { name: String(form.get("name")), symbol: String(form.get("symbol")), description: String(form.get("description")), docsUrl: String(form.get("docsUrl")) || null };
+      const copyHash = keccak256(encodeAbiParameters(parseAbiParameters("string,string,string,string"), [copy.name, copy.symbol, copy.description, copy.docsUrl ?? ""]));
+      const nonce = toHex(crypto.getRandomValues(new Uint8Array(32)));
+      setStatus("03 / Sign creator copy authorization…");
+      const signature = await signTypedDataAsync({ domain: copyDomain(auctionAddress), types: COPY_AUTH_TYPES, primaryType: "LaunchCopyAuthorization", message: { auctionId: BigInt(auctionId), copyHash, nonce } });
+      const response = await fetch(`${apiUrl}/launches/${auctionId}/copy`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...copy, nonce, signature }) });
+      if (!response.ok) throw new Error(`Copy API returned ${response.status}: ${await response.text()}`);
+      setStatus(`Complete — auction #${auctionId} and authenticated copy are live.`);
+    } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+  }
+
+  if (!isConnected) {
+    return (
+      <section className="rounded-lg border border-line bg-surface p-6 sm:p-8">
+        <span className="font-mono text-[10px] tracking-[0.18em] text-magenta">{t("walletBoundary")}</span>
+        <h2 className="mt-3 text-xl font-semibold tracking-tight text-fg">{t("connectTitle")}</h2>
+        <p className="mt-2 max-w-prose text-sm leading-relaxed text-fg-muted">
+          {t("connectBody")}
+        </p>
+        <button
+          onClick={() => connect({ connector: injected() })}
+          className="glow-magenta mt-5 rounded-md bg-magenta px-5 py-2.5 font-mono text-sm font-semibold text-[#1a0516] transition-opacity hover:opacity-90"
+        >
+          {t("connectButton")}
+        </button>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-lg border border-line bg-surface p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-4">
+        <code className="font-mono text-xs break-all text-cyan">{address}</code>
+        <button
+          onClick={() => disconnect()}
+          className="font-mono text-xs text-fg-muted transition-colors hover:text-rose"
+        >
+          {t("disconnect")}
+        </button>
+      </div>
+
+      <form action={create} className="mt-5 grid gap-4">
+        <label className={LABEL}>
+          {t("tokenAddress")}
+          <input name="token" required pattern="0x[0-9a-fA-F]{40}" className={FIELD} />
+        </label>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className={LABEL}>
+            {t("supply")}
+            <input name="supply" required type="number" min="0.000000000000000001" step="any" className={FIELD} />
+          </label>
+          <label className={LABEL}>
+            {t("floor")}
+            <input name="floor" required type="number" min="0.000000000000000001" step="any" className={FIELD} />
+          </label>
+        </div>
+        <label className={LABEL}>
+          {t("commitOpens")}
+          <input name="start" required type="datetime-local" className={FIELD} />
+        </label>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className={LABEL}>
+            {t("commitMinutes")}
+            <input name="commitMinutes" defaultValue="30" required type="number" min="1" className={FIELD} />
+          </label>
+          <label className={LABEL}>
+            {t("revealMinutes")}
+            <input name="revealMinutes" defaultValue="30" required type="number" min="1" className={FIELD} />
+          </label>
+        </div>
+        <button type="submit" className={SUBMIT}>{t("submitCreate")}</button>
+      </form>
+
+      {auctionId !== null && (
+        <form action={submitCopy} className="mt-8 grid gap-4 border-t border-line pt-6">
+          <div className="font-mono text-[10px] tracking-[0.16em] text-fg-muted">
+            <span className="text-magenta">02</span> {t("copyStep")}
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className={LABEL}>
+              {t("projectName")}
+              <input name="name" required maxLength={120} className={FIELD} />
+            </label>
+            <label className={LABEL}>
+              {t("symbol")}
+              <input name="symbol" required maxLength={32} className={FIELD} />
+            </label>
+          </div>
+          <label className={LABEL}>
+            {t("description")}
+            <textarea name="description" maxLength={8000} rows={6} className={FIELD} />
+          </label>
+          <label className={LABEL}>
+            {t("docsUrl")}
+            <input name="docsUrl" type="url" className={FIELD} />
+          </label>
+          <button type="submit" className={SUBMIT}>{t("submitCopy")}</button>
+        </form>
+      )}
+
+      <output className="mt-5 block rounded-md border border-line bg-[#080b11] px-3 py-2.5 font-mono text-xs text-fg-muted">
+        {status ?? t("statusAwaiting")}
+      </output>
+    </section>
+  );
+}

@@ -1,0 +1,46 @@
+{
+  "name": "portus",
+  "private": true,
+  "version": "0.2.0",
+  "description": "Portus — fixed-price whitelist launches that settle straight into a permanently locked pool, opening at exactly the subscription price.",
+  "type": "module",
+  "workspaces": [
+    "packages/shared",
+    "apps/api",
+    "apps/keeper",
+    "apps/web",
+    "contracts"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm run build -w @portus/shared && npm run build --workspaces --if-present",
+    "typecheck": "npm run build -w @portus/shared && npm run typecheck --workspaces --if-present",
+    "test": "npm run build -w @portus/shared && npm run test --workspaces --if-present",
+    "dev:api": "npm run dev -w @portus/api",
+    "dev:web": "npm run dev -w @portus/web",
+    "keeper": "npm run start -w @portus/keeper",
+    "finalize:local": "npm run once -w @portus/keeper",
+    "rewards": "npm run rewards -w @portus/keeper",
+    "chain": "npm run chain -w @portus/contracts",
+    "contracts:compile": "npm run compile -w @portus/contracts",
+    "contracts:deploy": "npm run deploy:local -w @portus/contracts",
+    "contracts:deploy:robinhood-testnet": "npm run deploy:robinhood-testnet -w @portus/contracts",
+    "contracts:deploy:robinhood": "npm run deploy:robinhood -w @portus/contracts",
+    "contracts:deploy:ethereum": "npm run deploy:ethereum -w @portus/contracts",
+    "new-launch:local": "npm run new-launch:local -w @portus/contracts",
+    "demo-states:local": "npm run demo-states:local -w @portus/contracts",
+    "e2e": "npm run e2e:local -w @portus/contracts",
+    "seed": "npm run seed -w @portus/api",
+    "sync-env": "node scripts/sync-env.mjs",
+    "newkey": "node -e \"console.log('0x'+require('crypto').randomBytes(32).toString('hex'))\"",
+    "preflight": "node scripts/preflight.mjs",
+    "reset": "node scripts/reset.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "tsx": "^4.23.0",
+    "@types/node": "^22.10.0"
+  }
+}

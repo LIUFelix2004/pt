@@ -1,0 +1,16 @@
+/** Compute the unique clearing-price candidate submitted to the on-chain verifier. */
+export function computeClearingPrice(
+  bids: Array<{ price: bigint; amount: bigint }>,
+  supply: bigint,
+  floorPrice: bigint,
+): bigint {
+  const totalDemand = bids.reduce((sum, bid) => sum + bid.amount, 0n);
+  if (totalDemand < supply) return floorPrice;
+
+  const candidates = [...new Set(bids.map((bid) => bid.price))].sort((a, b) => (a > b ? -1 : 1));
+  for (const price of candidates) {
+    const demand = bids.filter((bid) => bid.price >= price).reduce((sum, bid) => sum + bid.amount, 0n);
+    if (demand >= supply) return price;
+  }
+  return floorPrice;
+}

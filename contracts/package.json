@@ -1,0 +1,36 @@
+{
+  "name": "@portus/contracts",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test nodejs",
+    "test:fuzz:ci": "node scripts/fuzz-ci.mjs",
+    "coverage": "hardhat test nodejs --coverage",
+    "chain": "hardhat node",
+    "deploy:local": "hardhat run scripts/deploy.ts --network localhost",
+    "deploy:robinhood-testnet": "hardhat run scripts/deploy.ts --network robinhood-testnet",
+    "deploy:robinhood": "hardhat run scripts/deploy.ts --network robinhood",
+    "deploy:ethereum": "hardhat run scripts/deploy.ts --network ethereum",
+    "verify:robinhood-testnet": "hardhat verify --network robinhood-testnet",
+    "verify:robinhood": "hardhat verify --network robinhood",
+    "verify:ethereum": "hardhat verify --network ethereum",
+    "new-launch:local": "hardhat run scripts/new-launch.ts --network localhost",
+    "new-launch:robinhood-testnet": "hardhat run scripts/new-launch.ts --network robinhood-testnet",
+    "merkle": "tsx scripts/merkle.ts",
+    "e2e:local": "hardhat run scripts/e2e.ts --network localhost",
+    "typecheck": "hardhat compile && tsc --noEmit -p tsconfig.json",
+    "export-abi": "node scripts/export-abi.mjs",
+    "demo-states:local": "hardhat run scripts/demo-states.ts --network localhost"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.6.0",
+    "@portus/shared": "*"
+  },
+  "devDependencies": {
+    "hardhat": "^3.13.0",
+    "@nomicfoundation/hardhat-toolbox-viem": "^5.0.7",
+    "viem": "^2.55.0"
+  }
+}

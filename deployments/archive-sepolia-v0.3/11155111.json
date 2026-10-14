@@ -1,0 +1,31 @@
+{
+  "chainId": 11155111,
+  "network": "sepolia",
+  "factory": "0x2cd388c37852e0107771e177426191f5573a4e21",
+  "locker": "0x32d13c01f9ae25246b71042a2Dc930e2C9FF8148",
+  "feeSplitter": "0x9229E4601f45725775eDd553E09EC209A09355ba",
+  "distributor": "0x3D991e82Bcf52d5fCa22f7D5C7b3982B10c9b960",
+  "flywheel": "0x05d384322640B111630c59eEe50d1Ec09d09ad8E",
+  "quoteAdmin": "0xF124778D183dd498074619Bfa895670C629867D4",
+  "ecosystem": "0xF124778D183dd498074619Bfa895670C629867D4",
+  "rootPublisher": "0xF124778D183dd498074619Bfa895670C629867D4",
+  "quoteAssets": [
+    {
+      "address": "0xe41d4453a34a5978e08fdee5739a1d73af4de7b4",
+      "symbol": "tWETH",
+      "decimals": 18,
+      "freezable": false
+    }
+  ],
+  "libraries": {
+    "TokenDeployer": "0xb75ac85c79c34137509b5030620c13fad9bc69d3",
+    "PoolDeployer": "0x35d57cb885a3e0b1e2e6820d07d1c1903e8b663c",
+    "SaleDeployer": "0xa055b028ff09083a72bd4fd8bbc503fa3ddef084",
+    "TreasuryDeployer": "0x4e9b4fe37b03b7ddb2c620d3e294c2b7bf3c72a3"
+  },
+  "deployer": "0xf124778d183dd498074619bfa895670c629867d4",
+  "deployedAt": "2026-10-10T09:18:42.541Z",
+  "startBlock": 11883575,
+  "gitCommit": null,
+  "demoToken": "0x2B9A5b45790EDAB774392ead0F382E59f933A994"
+}

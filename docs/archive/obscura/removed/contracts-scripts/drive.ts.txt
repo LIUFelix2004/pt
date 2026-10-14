@@ -1,0 +1,302 @@
+/**
+ * Phase-aware driver for a live auction. Safe to re-run at any time.
+ *
+ * On a local chain you can fast-forward with evm_increaseTime, so scripts/e2e.ts
+ * runs the whole lifecycle in one go. On a public testnet real time passes, so
+ * driving an auction means coming back across several windows. This script
+ * inspects the current phase and does whatever is appropriate now, then tells
+ * you when to return.
+ *
+ * It also fills the gap that matters most in production: settle() is
+ * permissionless, which means nobody is obliged to call it. An auction sits in
+ * SETTLING until someone does. This is that someone — run it on a timer and it
+ * becomes the keeper.
+ *
+ *   npx hardhat run scripts/drive.ts --network sepolia
+ *
+ * Env:
+ *   AUCTION_ID   which auction to drive (default 0)
+ *   BID_PRICE    max price in ETH per token, e.g. 0.002 (omit to skip bidding)
+ *   BID_AMOUNT   whole tokens to bid for, e.g. 1000
+ */
+import { network } from "hardhat";
+import {
+  encodeAbiParameters,
+  formatEther,
+  keccak256,
+  parseAbiParameters,
+  parseEther,
+  toHex,
+} from "viem";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { getChain, assertKeyIsSafeForChain, explorerTxUrl } from "@obscura/shared";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = resolve(HERE, "../..");
+const WAD = 10n ** 18n;
+
+const PHASES = ["PENDING", "COMMIT", "REVEAL", "SETTLING", "SETTLED", "CANCELLED"] as const;
+
+const AUCTION_ID = BigInt(process.env.AUCTION_ID ?? 0);
+
+interface StoredBid {
+  price: string;
+  amount: string;
+  salt: `0x${string}`;
+  deposit: string;
+}
+
+function bidStorePath(chainId: number): string {
+  const dir = resolve(ROOT, "contracts/.bids");
+  mkdirSync(dir, { recursive: true });
+  return resolve(dir, `${chainId}.json`);
+}
+
+function readBids(chainId: number): Record<string, StoredBid> {
+  const path = bidStorePath(chainId);
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function writeBid(chainId: number, key: string, bid: StoredBid): void {
+  const all = readBids(chainId);
+  all[key] = bid;
+  writeFileSync(bidStorePath(chainId), JSON.stringify(all, null, 2) + "\n", { mode: 0o600 });
+}
+
+function countdown(target: bigint, now: bigint): string {
+  const secs = Number(target - now);
+  if (secs <= 0) return "now";
+  const m = Math.floor(secs / 60);
+  const h = Math.floor(m / 60);
+  return h > 0 ? `${h}h ${m % 60}m` : `${m}m ${secs % 60}s`;
+}
+
+async function main() {
+  const { viem } = await network.connect();
+  const publicClient = await viem.getPublicClient();
+  const chainId = await publicClient.getChainId();
+  const chain = getChain(chainId);
+
+  const deploymentPath = resolve(ROOT, `deployments/${chainId}.json`);
+  if (!existsSync(deploymentPath)) {
+    throw new Error(`No deployments/${chainId}.json. Deploy to this network first.`);
+  }
+  const deployment = JSON.parse(readFileSync(deploymentPath, "utf8"));
+
+  const [wallet] = await viem.getWalletClients();
+  if (!wallet) throw new Error("No signer. Set DEPLOYER_PRIVATE_KEY in .env.");
+  const me = wallet.account.address;
+  assertKeyIsSafeForChain(me, chainId);
+
+  const auction = await viem.getContractAt("LaunchpadAuction", deployment.launchpadAuction);
+  const registry = await viem.getContractAt("AgentRegistry", deployment.agentRegistry);
+
+  const confirmations = chain.isLocal ? 1 : 2;
+  const send = async (label: string, hash: `0x${string}`) => {
+    await publicClient.waitForTransactionReceipt({ hash, confirmations });
+    const url = explorerTxUrl(chainId, hash);
+    console.log(`  ${label} — ${hash}${url ? `\n     ${url}` : ""}`);
+  };
+
+  const state = await auction.read.auctionOf([AUCTION_ID]);
+  if (state.creator === "0x0000000000000000000000000000000000000000") {
+    throw new Error(`Auction #${AUCTION_ID} does not exist on ${chain.displayName}.`);
+  }
+  const phaseIdx = Number(await auction.read.phaseOf([AUCTION_ID]));
+  const phase = PHASES[phaseIdx]!;
+  const now = (await publicClient.getBlock()).timestamp;
+
+  console.log(`network:  ${chain.displayName} (chain ${chainId})`);
+  console.log(`account:  ${me}`);
+  console.log(`auction:  #${AUCTION_ID}`);
+  console.log(`phase:    ${phase}`);
+  console.log(`supply:   ${state.supplyForSale / WAD} tokens`);
+  console.log(`floor:    ${formatEther(state.floorPrice)} ETH`);
+  console.log(`revealed: ${state.totalRevealedDemand / WAD} tokens\n`);
+
+  // Namespaced by contract: auction ids restart at #0 on every deployment, so a
+  // key without the address makes a stale record shadow a fresh auction — and
+  // the script then refuses to bid during a live commit window.
+  const bidKey = `${String(deployment.launchpadAuction).toLowerCase()}:${AUCTION_ID}:${me.toLowerCase()}`;
+
+  switch (phase) {
+    case "PENDING": {
+      console.log(`Commit window opens in ${countdown(state.commitStart, now)}. Re-run then.`);
+      break;
+    }
+
+    case "COMMIT": {
+      if (!process.env.BID_PRICE || !process.env.BID_AMOUNT) {
+        console.log(
+          `Commit window closes in ${countdown(state.commitEnd, now)}.\n` +
+            `Set BID_PRICE and BID_AMOUNT to place a sealed bid, e.g.\n` +
+            `  BID_PRICE=0.002 BID_AMOUNT=1000 npx hardhat run scripts/drive.ts --network ${chain.networkName}`,
+        );
+        break;
+      }
+      if (readBids(chainId)[bidKey]) {
+        console.log("Already committed from this machine. One bid per auction.");
+        break;
+      }
+
+      if (!(await registry.read.isRegistered([me]))) {
+        const stake = await registry.read.stakeRequirement();
+        console.log(`Not registered. Staking ${formatEther(stake)} ETH...`);
+        const verifier = await registry.read.personhoodVerifier();
+        const proof = process.env.PERSONHOOD_PROOF ?? "0x";
+        if (verifier !== "0x0000000000000000000000000000000000000000" && proof === "0x") {
+          throw new Error(`Registry requires a personhood proof from verifier ${verifier}; set PERSONHOOD_PROOF.`);
+        }
+        await send("registered", await registry.write.register([proof as `0x${string}`], { value: stake }));
+      }
+
+      const price = parseEther(process.env.BID_PRICE);
+      const amount = BigInt(process.env.BID_AMOUNT) * WAD;
+      const deposit = (amount * price) / WAD;
+      const salt = toHex(crypto.getRandomValues(new Uint8Array(32)));
+      const commitment = keccak256(
+        encodeAbiParameters(parseAbiParameters("uint256, address, uint256, uint256, bytes32"), [
+          AUCTION_ID,
+          me,
+          price,
+          amount,
+          salt,
+        ]),
+      );
+
+      console.log(
+        `Committing ${amount / WAD} tokens at up to ${formatEther(price)} ETH ` +
+          `(collateral ${formatEther(deposit)} ETH)...`,
+      );
+      // Persist the salt BEFORE sending. If the write succeeded and the process
+      // died before saving, the collateral would be unrecoverable.
+      writeBid(chainId, bidKey, {
+        price: price.toString(),
+        amount: amount.toString(),
+        salt,
+        deposit: deposit.toString(),
+      });
+      await send("committed", await auction.write.commit([AUCTION_ID, commitment], { value: deposit }));
+
+      console.log(
+        `\nSalt saved to ${bidStorePath(chainId)}\n` +
+          `Reveal opens in ${countdown(state.commitEnd, now)} and closes ` +
+          `${countdown(state.revealEnd, now)} from now. Re-run this script in that window ` +
+          `or the collateral is forfeited.`,
+      );
+      break;
+    }
+
+    case "REVEAL": {
+      const stored = readBids(chainId)[bidKey];
+      if (!stored) {
+        console.log(
+          `No sealed bid stored for this account.\n` +
+            `Reveal closes in ${countdown(state.revealEnd, now)}.`,
+        );
+        break;
+      }
+      const bid = await auction.read.bidOf([AUCTION_ID, me]);
+      if (bid.revealed) {
+        console.log(`Already revealed. Settlement opens in ${countdown(state.revealEnd, now)}.`);
+        break;
+      }
+      console.log("Revealing...");
+      await send(
+        "revealed",
+        await auction.write.reveal([AUCTION_ID, BigInt(stored.price), BigInt(stored.amount), stored.salt]),
+      );
+      console.log(`\nRe-run after ${countdown(state.revealEnd, now)} to settle and claim.`);
+      break;
+    }
+
+    case "SETTLING": {
+      // Reconstruct the revealed order book from events — the contract stores
+      // the bidder list privately, and events are the canonical public record.
+      const logs = await auction.getEvents.Revealed(
+        { auctionId: AUCTION_ID },
+        { fromBlock: BigInt(deployment.startBlock ?? 0), toBlock: "latest" },
+      );
+      const bids = logs.map((l) => ({
+        bidder: l.args.bidder as `0x${string}`,
+        price: l.args.price as bigint,
+        amount: l.args.amount as bigint,
+      }));
+      console.log(`Reconstructed ${bids.length} revealed bid(s) from events.`);
+
+      const sorted = bids.sort((a, b) => a.price === b.price ? a.bidder.localeCompare(b.bidder) : a.price > b.price ? -1 : 1);
+      const BATCH_SIZE = Number(process.env.SETTLEMENT_BATCH_SIZE ?? 100);
+      const progress = await auction.read.settlementStateOf([AUCTION_ID]);
+
+      if (!progress.clearingFinalized) {
+        for (let offset = Number(progress.settlementProcessed); offset < sorted.length; offset += BATCH_SIZE) {
+          const batch = sorted.slice(offset, offset + BATCH_SIZE).map((bid) => bid.bidder);
+          await send(`settlement batch ${offset / BATCH_SIZE + 1}`, await auction.write.submitSettlementBatch([AUCTION_ID, batch]));
+        }
+        await send("clearing finalized", await auction.write.finalizeClearing([AUCTION_ID]));
+      }
+
+      const afterClearing = await auction.read.settlementStateOf([AUCTION_ID]);
+      for (let offset = Number(afterClearing.allocationProcessed); offset < sorted.length; offset += BATCH_SIZE) {
+        const batch = sorted.slice(offset, offset + BATCH_SIZE).map((bid) => bid.bidder);
+        await send(`allocation batch ${offset / BATCH_SIZE + 1}`, await auction.write.submitAllocationBatch([AUCTION_ID, batch]));
+      }
+      await send("settled", await auction.write.finalizeSettlement([AUCTION_ID]));
+
+      const totalDemand = bids.reduce((s, b) => s + b.amount, 0n);
+      let clearing = state.floorPrice;
+      if (totalDemand >= state.supplyForSale) {
+        const candidates = [...new Set(bids.map((b) => b.price))].sort((a, b) => (a > b ? -1 : 1));
+        for (const p of candidates) {
+          const demand = bids.filter((b) => b.price >= p).reduce((s, b) => s + b.amount, 0n);
+          if (demand >= state.supplyForSale) {
+            clearing = p;
+            break;
+          }
+        }
+      }
+
+      const settledState = await auction.read.auctionOf([AUCTION_ID]);
+      console.log(
+        `Demand ${totalDemand / WAD} vs supply ${state.supplyForSale / WAD} — ` +
+          `cleared at ${formatEther(settledState.clearingPrice)} ETH in bounded batches.`,
+      );
+      if (settledState.clearingPrice !== clearing) throw new Error("batched clearing disagrees with local computation");
+      console.log("\nRe-run to claim.");
+      break;
+    }
+
+    case "SETTLED": {
+      console.log(`Clearing price: ${formatEther(state.clearingPrice)} ETH`);
+      const bid = await auction.read.bidOf([AUCTION_ID, me]);
+      if (!bid.revealed) {
+        console.log("No revealed bid from this account — nothing to claim.");
+        break;
+      }
+      if (bid.claimed) {
+        console.log("Already claimed.");
+        break;
+      }
+      const allocation = await auction.read.allocationOf([AUCTION_ID, me]);
+      console.log(`Your allocation: ${allocation / WAD} tokens. Claiming...`);
+      await send("claimed", await auction.write.claim([AUCTION_ID]));
+      break;
+    }
+
+    case "CANCELLED":
+      console.log("Auction was cancelled.");
+      break;
+  }
+}
+
+main().catch((err) => {
+  console.error(err instanceof Error ? err.message : err);
+  process.exitCode = 1;
+});

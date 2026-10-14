@@ -1,0 +1,53 @@
+﻿# Portus API + Keeper on VPS (Docker Compose)
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGET: api
+    image: portus:api
+    container_name: portus-api
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    env_file:
+      - .env
+    environment:
+      PORTUS_TARGET: api
+      API_PORT: "8787"
+      DATABASE_PATH: /data/portus-mainnet.sqlite
+      REWARDS_DIR: /data/rewards
+      CHAIN_ID: "1"
+      NODE_ENV: production
+    volumes:
+      - portus_data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+  keeper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGET: keeper
+    image: portus:keeper
+    container_name: portus-keeper
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORTUS_TARGET: keeper
+      CHAIN_ID: "1"
+      KEEPER_INTERVAL_SECONDS: "30"
+      KEEPER_SWEEP_DUST: "true"
+      KEEPER_ECONOMY: "true"
+      KEEPER_LOW_BALANCE_ETH: "0.01"
+      NODE_ENV: production
+    depends_on:
+      - api
+volumes:
+  portus_data:

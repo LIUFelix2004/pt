@@ -1,0 +1,6 @@
+name = "portus-app"
+compatibility_date = "2024-09-23"
+pages_build_output_dir = "out"
+
+[vars]
+PORTUS_API_ORIGIN = "http://85.155.224.140.sslip.io:8787"

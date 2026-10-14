@@ -1,0 +1,29 @@
+# fly apps create portus-keeper
+# fly secrets set -a portus-keeper ...
+# fly deploy -a portus-keeper -c fly.keeper.toml --ha=false
+#
+# No HTTP service — long-running worker (Dockerfile TARGET=keeper).
+# Fund 0x2593CCdbBe752fF9Aa1a5Fe3c8615818a8877cb0 with ~0.02+ ETH before expecting txs.
+
+app = "portus-keeper"
+primary_region = "nrt"
+
+[build]
+  dockerfile = "Dockerfile"
+  [build.args]
+    TARGET = "keeper"
+
+[env]
+  CHAIN_ID = "1"
+  KEEPER_INTERVAL_SECONDS = "30"
+  KEEPER_SWEEP_DUST = "true"
+  KEEPER_ECONOMY = "true"
+  KEEPER_LOW_BALANCE_ETH = "0.01"
+  PORTUS_TARGET = "keeper"
+
+[deploy]
+  strategy = "immediate"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

@@ -1,0 +1,12 @@
+{
+  "chainId": 11155111,
+  "network": "sepolia",
+  "agentRegistry": "0xcaa8a2c0026042c25facd4a37ec8b3c5119d0926",
+  "personhoodVerifier": "0x0000000000000000000000000000000000000000",
+  "launchpadAuction": "0xc66e90bd17330c26158e5fb7f01cbed0c42cce11",
+  "deployer": "0xde25bf5e99fa2f79307545534c3d3864c2e20299",
+  "deployedAt": "2026-08-22T12:13:02.894Z",
+  "demoToken": "0x73dfbf10912b7ccb06a3d01ecd46788327a1d846",
+  "demoAuctionId": 3,
+  "startBlock": 11542956
+}
