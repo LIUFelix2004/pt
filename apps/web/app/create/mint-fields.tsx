@@ -32,6 +32,14 @@ export const MINT_FORM_DEFAULTS = {
   staticPct: pctStr(MINT_DEFAULTS.staticBps),
   /** Trading fee T in percent, charged on both buy and sell (1–5%, 0.1% steps). */
   feePct: "1",
+  /** Display-only split of the creator share (T−0.2%), percent of that share. Contract routes 100% to creator. */
+  shareFlywheel: "0",
+  shareCreator: "100",
+  shareTreasury: "0",
+  /** Display-only supply split of 首发量, percent. Contract is fixed 50/50/0. */
+  splitSale: "50",
+  splitLp: "50",
+  splitReward: "0",
 };
 export type MintForm = typeof MINT_FORM_DEFAULTS;
 
@@ -60,6 +68,14 @@ export const feeValid = (v: string) => {
 };
 
 /** Derived figures and validation for a mint-mode form. Recipients default to `self`. */
+const pctNum = (v: string) => (/^\d+(\.\d+)?$/.test((v || "").trim()) ? Number(v) : NaN);
+/** Validates three percentages: each 0..100, sum exactly 100 (to 0.01). */
+export const tripleValid = (a: string, b: string, c: string) => {
+  const xs = [a, b, c].map(pctNum);
+  if (xs.some((x) => !Number.isFinite(x) || x < 0 || x > 100)) return false;
+  return Math.abs(xs[0] + xs[1] + xs[2] - 100) < 0.005;
+};
+
 export function useMintPlan(m: MintForm, decimals: number, self: Address | undefined) {
   return useMemo(() => {
     const rawR = whole(m.raise, decimals);
@@ -117,6 +133,8 @@ export function useMintPlan(m: MintForm, decimals: number, self: Address | undef
       !supplyOk && "blockMintSupply",
       !scheduleOk && "blockMintSchedule",
       !taxOk && "blockMintTax",
+      !tripleValid(m.shareFlywheel, m.shareCreator, m.shareTreasury) && "blockMintFeeShare",
+      !tripleValid(m.splitSale, m.splitLp, m.splitReward) && "blockMintSupplySplit",
       !addressesOk && "blockMintAddress",
     ].filter(Boolean) as string[];
 
@@ -186,11 +204,6 @@ export function MintRaiseFields({
             </div>
           </div>
           <div>
-            <div className="text-fg-muted">{t("supplySplit")}</div>
-            <div className="text-fg">{t("mintSplit", { sale: formatTokens(p.qSale, 0), lp: formatTokens(p.qLp, 0) })}</div>
-            <div className="text-[11px] text-fg-muted">{t("mintSplitNote")}</div>
-          </div>
-          <div>
             <div className="text-fg-muted">{t("mintFdv")}</div>
             <div className="text-fg">
               {plan.maxSupply ? formatUnits((p.R * plan.maxSupply) / p.qSale, decimals, 2) : "—"} {symbol}
@@ -198,7 +211,34 @@ export function MintRaiseFields({
           </div>
         </div>
       ) : null}
+      <SupplySplitFields m={m} setM={setM} />
     </>
+  );
+}
+
+function SupplySplitFields({ m, setM }: { m: MintForm; setM: <K extends keyof MintForm>(k: K, v: MintForm[K]) => void }) {
+  const t = useTranslations("create");
+  const ok = tripleValid(m.splitSale, m.splitLp, m.splitReward);
+  const S0 = Number((m.initial || "").trim());
+  const amt = (v: string) => (ok && Number.isFinite(S0) && S0 > 0 ? Math.floor((S0 * Number(v)) / 100).toLocaleString() : "—");
+  const custom = ok && (Number(m.splitSale) !== 50 || Number(m.splitLp) !== 50 || Number(m.splitReward) !== 0);
+  const rows: [keyof MintForm, string][] = [["splitSale", "mintSplitSale"], ["splitLp", "mintSplitLp"], ["splitReward", "mintSplitReward"]];
+  return (
+    <div className="grid gap-3">
+      <div className="text-[13px] text-fg">{t("supplySplit")}</div>
+      <div className="grid gap-4 sm:grid-cols-3">
+        {rows.map(([k, label]) => (
+          <label key={k} className={LABEL}>
+            {t(label)} (%)
+            <input value={m[k] as string} onChange={(e) => setM(k, e.target.value.trim() as never)} type="number" min={0} max={100} step={1} inputMode="decimal" className={FIELD} />
+            <span className={HINT}>{t("mintSplitAmount", { amount: amt(m[k] as string) })}</span>
+          </label>
+        ))}
+      </div>
+      <span className={HINT}>{ok ? t("mintSplitSum") : t("mintSplitInvalid")}</span>
+      <p className={HINT}>{t("mintSplitPriceHint")}</p>
+      {custom ? <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-[12.5px] text-amber-700 dark:text-amber-300">{t("mintSplitWarn")}</p> : null}
+    </div>
   );
 }
 
@@ -266,6 +306,7 @@ export function MintTaxFields({ m, setM }: { m: MintForm; setM: <K extends keyof
   const ok = feeValid(m.feePct);
   const T = Number(m.feePct || 0);
   const creator = ok ? (Math.round(T * 100) - ECOSYSTEM_FEE_BPS) / 100 : null;
+  const shareOk = tripleValid(m.shareFlywheel, m.shareCreator, m.shareTreasury);
   return (
     <div className={SECTION}>
       <div className={KICKER}>{t("sectionMintTax")}</div>
@@ -298,6 +339,22 @@ export function MintTaxFields({ m, setM }: { m: MintForm; setM: <K extends keyof
           <div className="text-fg">{creator !== null ? `${creator.toFixed(1)}%` : "—"}</div>
         </div>
       </div>
+      <div className="text-[13px] text-fg">{t("mintShareTitle", { share: creator !== null ? `${creator.toFixed(1)}%` : "—" })}</div>
+      <div className="grid gap-4 sm:grid-cols-3">
+        {([["shareFlywheel", "mintShareFlywheel"], ["shareCreator", "mintShareCreator"], ["shareTreasury", "mintShareTreasury"]] as [keyof MintForm, string][]).map(([k, label]) => (
+          <label key={k} className={LABEL}>
+            {t(label)} (%)
+            <input value={m[k] as string} onChange={(e) => setM(k, e.target.value.trim() as never)} type="number" min={0} max={100} step={1} inputMode="decimal" className={FIELD} />
+            <span className={HINT}>
+              {t("mintShareEffective", { pct: shareOk && creator !== null ? `${((creator * Number(m[k])) / 100).toFixed(2)}%` : "—" })}
+            </span>
+          </label>
+        ))}
+      </div>
+      <span className={HINT}>{shareOk ? t("mintShareSum") : t("mintShareInvalid")}</span>
+      {shareOk && Number(m.shareCreator) < 100 ? (
+        <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-[12.5px] text-amber-700 dark:text-amber-300">{t("mintShareWarn")}</p>
+      ) : null}
       <p className={HINT}>{t("mintFeeNote", { eco: `${ECOSYSTEM_ADDRESS.slice(0, 6)}…${ECOSYSTEM_ADDRESS.slice(-4)}` })}</p>
     </div>
   );
