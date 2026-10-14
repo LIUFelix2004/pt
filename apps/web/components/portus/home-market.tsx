@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { getLaunches, type Launch } from "@/lib/api";
 import { CHAIN_INFO } from "@/lib/chain";
+import { demoLaunches, isDemoLaunch } from "@/lib/demo-launches";
 import { useUiLang } from "@/components/portus/use-ui-lang";
 import { cn } from "@/lib/utils";
 
@@ -41,6 +42,8 @@ const ZH = {
   wl: "下载 DeBox 了解更多",
   wlCta: "下载 DeBox ↗",
   noFeat: "暂无正在铸造的代币",
+  demo: "示例",
+  demoTip: "展示用示例",
   latest: "最新",
 };
 const EN = {
@@ -77,6 +80,8 @@ const EN = {
   wl: "Download DeBox to learn more",
   wlCta: "Get DeBox ↗",
   noFeat: "No token is minting right now",
+  demo: "Demo",
+  demoTip: "Display-only example",
   latest: "Latest",
 };
 
@@ -201,6 +206,7 @@ function FeaturedCard({ l: f, t, apiErr }: { l: { l: Launch; live: boolean } | n
     );
   }
   const l = f.l;
+  const demo = isDemoLaunch(l);
   const dq = l.quote?.decimals ?? 18;
   const sym = l.quote?.symbol === "WETH" ? "ETH" : l.quote?.symbol ?? "";
   const target = num(l.raiseTarget, dq);
@@ -215,15 +221,27 @@ function FeaturedCard({ l: f, t, apiErr }: { l: { l: Launch; live: boolean } | n
         </span>
         <span className="text-xs text-fg-muted">{phaseLabel(l, t.mint)}</span>
       </div>
-      <Link href={`/launch/view/?token=${encodeURIComponent(l.token)}`} className="flex items-center gap-4">
-        <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-surface-2">
-          <TokenIcon l={l} />
-        </div>
-        <div className="min-w-0">
-          <div className="truncate text-xl font-bold text-fg">{tokenName(l)}</div>
-          <div className="text-sm text-fg-muted">${l.copy?.symbol || "—"} · {short(l.token)}</div>
-        </div>
-      </Link>
+      {(() => {
+        const inner = (
+          <>
+            <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-surface-2">
+              <TokenIcon l={l} />
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-xl font-bold text-fg">
+                {tokenName(l)}
+                <DemoBadge l={l} t={t} />
+              </div>
+              <div className="text-sm text-fg-muted">${l.copy?.symbol || "—"} · {short(l.token)}</div>
+            </div>
+          </>
+        );
+        return demo ? (
+          <div className="flex items-center gap-4" title={t.demoTip}>{inner}</div>
+        ) : (
+          <Link href={`/launch/view/?token=${encodeURIComponent(l.token)}`} className="flex items-center gap-4">{inner}</Link>
+        );
+      })()}
       <div className="mt-6 flex justify-between text-sm">
         <span className="text-fg-muted">{t.raiseTarget} <b className="text-fg">{unit(target, sym)}</b></span>
         <span className="text-fg-muted">{t.raised} <b className="text-brand">{unit(raised, sym)}</b></span>
@@ -232,11 +250,26 @@ function FeaturedCard({ l: f, t, apiErr }: { l: { l: Launch; live: boolean } | n
         <div className="h-full rounded-full bg-gradient-to-r from-[#6d28d9] via-[#0e7490] to-[#22c55e]" style={{ width: `${pct}%` }} />
       </div>
       <div className="mt-1 text-right text-xs text-fg-muted">{pct.toFixed(pct > 0 && pct < 1 ? 2 : 0)}%</div>
-      <Link href={`/launch/view/?token=${encodeURIComponent(l.token)}`} className="mt-4 block rounded-xl bg-brand py-3 text-center font-semibold text-white hover:opacity-90">
-        {t.view}
-      </Link>
+      {demo ? (
+        <button type="button" disabled title={t.demoTip} className="mt-4 block w-full cursor-not-allowed rounded-xl bg-brand py-3 text-center font-semibold text-white opacity-60">
+          {t.view} · {t.demoTip}
+        </button>
+      ) : (
+        <Link href={`/launch/view/?token=${encodeURIComponent(l.token)}`} className="mt-4 block rounded-xl bg-brand py-3 text-center font-semibold text-white hover:opacity-90">
+          {t.view}
+        </Link>
+      )}
       <WlLine t={t} />
     </div>
+  );
+}
+
+function DemoBadge({ l, t }: { l: Launch; t: typeof ZH }) {
+  if (!isDemoLaunch(l)) return null;
+  return (
+    <span title={t.demoTip} className="ml-1.5 inline-block rounded border border-amber-500/50 bg-amber-500/10 px-1.5 py-px align-middle text-[11px] font-medium text-amber-600 dark:text-amber-300">
+      {t.demo}
+    </span>
   );
 }
 
@@ -303,12 +336,20 @@ export function HomeMarket({ initial }: { initial: Launch[] }) {
     });
   }, []);
 
-  const liveCount = useMemo(() => all.filter((l) => LIVE[l.phase]).length, [all]);
+  // Real launches first; display-only demo entries (lib/demo-launches) are appended after them.
+  const demos = useMemo(() => demoLaunches(), []);
+  const merged = useMemo(() => [...all, ...demos], [all, demos]);
+  const liveCount = useMemo(() => merged.filter((l) => LIVE[l.phase]).length, [merged]);
 
   const list = useMemo(() => {
     let rows = all.slice();
+    let demoRows = demos.slice();
     if (q) {
       const k = q.toLowerCase();
+      // Demo entries never match a contract-address search.
+      demoRows = demoRows.filter(
+        (l) => (l.copy?.symbol || "").toLowerCase().includes(k) || (l.copy?.name || "").toLowerCase().includes(k),
+      );
       rows = rows.filter(
         (l) =>
           l.token.toLowerCase().includes(k) ||
@@ -316,7 +357,10 @@ export function HomeMarket({ initial }: { initial: Launch[] }) {
           (l.copy?.name || "").toLowerCase().includes(k),
       );
     }
-    if (tab === "fav") rows = rows.filter((l) => favs.includes(l.token));
+    if (tab === "fav") {
+      rows = rows.filter((l) => favs.includes(l.token));
+      demoRows = [];
+    }
     const sortTab = tab === "fav" ? "new" : tab;
     const key = {
       new: (l: Launch) => l.startTime || l.launchId || 0,
@@ -325,8 +369,8 @@ export function HomeMarket({ initial }: { initial: Launch[] }) {
       mc: (l: Launch) => metrics(l).mc || 0,
     }[sortTab];
     rows.sort((a, b) => key(b) - key(a));
-    return rows;
-  }, [all, q, tab, favs]);
+    return [...rows, ...demoRows];
+  }, [all, demos, q, tab, favs]);
 
   const trending = useMemo(() => {
     return all
@@ -337,15 +381,17 @@ export function HomeMarket({ initial }: { initial: Launch[] }) {
           (metrics(b).raised || 0) - (metrics(a).raised || 0) ||
           (b.startTime || 0) - (a.startTime || 0),
       )
+      .concat(demos)
       .slice(0, 10);
-  }, [all]);
+  }, [all, demos]);
 
   const featured = useMemo(() => {
     const live = all.filter((l) => LIVE[l.phase]);
+    if (!live.length && demos.length) return { l: demos[0], live: true };
     if (live.length) return { l: live.slice().sort((a, b) => (metrics(b).raised || 0) - (metrics(a).raised || 0))[0], live: true };
     const latest = all.slice().sort((a, b) => (b.startTime || b.launchId || 0) - (a.startTime || a.launchId || 0))[0];
     return latest ? { l: latest, live: false } : null;
-  }, [all]);
+  }, [all, demos]);
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "fav", label: "★" },
@@ -371,7 +417,7 @@ export function HomeMarket({ initial }: { initial: Launch[] }) {
           </Link>
           <div className="relative mt-8 flex flex-wrap justify-center gap-3 text-sm text-fg-muted">
             {[
-              [all.length, t.sTotal],
+              [merged.length, t.sTotal],
               [liveCount, t.sLive],
               [chainLabel, t.sChain],
             ].map(([v, k]) => (
@@ -397,10 +443,14 @@ export function HomeMarket({ initial }: { initial: Launch[] }) {
           ) : (
             trending.map((l) => {
               const m = metrics(l);
+              const demo = isDemoLaunch(l);
               return (
                 <Link
                   key={l.token}
-                  href={`/launch/view/?token=${encodeURIComponent(l.token)}`}
+                  href={demo ? "#" : `/launch/view/?token=${encodeURIComponent(l.token)}`}
+                  onClick={demo ? (e) => e.preventDefault() : undefined}
+                  title={demo ? t.demoTip : undefined}
+                  aria-disabled={demo || undefined}
                   className="flex w-[min(270px,80vw)] shrink-0 snap-start gap-3 rounded-2xl border border-line bg-surface/80 p-3 backdrop-blur hover:border-brand"
                 >
                   <div className="grid h-[52px] w-[52px] shrink-0 place-items-center overflow-hidden rounded-[10px] bg-surface-2">
@@ -408,7 +458,10 @@ export function HomeMarket({ initial }: { initial: Launch[] }) {
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex justify-between gap-1.5">
-                      <span className="truncate font-bold">{tokenName(l)}</span>
+                      <span className="truncate font-bold">
+                        {tokenName(l)}
+                        <DemoBadge l={l} t={t} />
+                      </span>
                       <span className="shrink-0 text-[13px] text-brand">MC: {unit(m.mc, m.sym)}</span>
                     </div>
                     <div className="mt-0.5 text-xs text-fg-muted">CA: {short(l.token)}</div>
@@ -461,7 +514,7 @@ export function HomeMarket({ initial }: { initial: Launch[] }) {
                     {t.apiDown}
                   </td>
                 </tr>
-              ) : all.length === 0 ? (
+              ) : merged.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-5 py-12 text-center text-fg-muted">
                     {t.empty}{" "}
@@ -483,8 +536,10 @@ export function HomeMarket({ initial }: { initial: Launch[] }) {
                   return (
                     <tr
                       key={l.token}
-                      className="cursor-pointer hover:bg-surface"
+                      className={cn("hover:bg-surface", isDemoLaunch(l) ? "cursor-default" : "cursor-pointer")}
+                      title={isDemoLaunch(l) ? t.demoTip : undefined}
                       onClick={() => {
+                        if (isDemoLaunch(l)) return;
                         window.location.href = `/launch/view/?token=${encodeURIComponent(l.token)}`;
                       }}
                     >
@@ -507,6 +562,7 @@ export function HomeMarket({ initial }: { initial: Launch[] }) {
                           <div>
                             <div>
                               <b>{tokenName(l)}</b>
+                              <DemoBadge l={l} t={t} />
                               <span className="ml-1.5 inline-block rounded bg-surface-2 px-1.5 py-px text-[11px] text-fg-muted">
                                 {phaseLabel(l, t.mint)}
                               </span>
