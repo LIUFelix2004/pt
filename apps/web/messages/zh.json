@@ -241,7 +241,12 @@
     "mintSplitInvalid": "每项 0–100，合计须为 100%",
     "mintSplitPriceHint": "开盘价 = 认购价 要求 认购 = 进池。",
     "mintSplitWarn": "当前合约固定认购50%/进池50%，自定义切分需合约升级后生效，创建时按 50/50 上链",
-    "blockMintSupplySplit": "供应切分 认购/进池/初始奖励 合计须为 100%"
+    "blockMintSupplySplit": "供应切分 认购/进池/初始奖励 合计须为 100%",
+    "modeTaxed": "创建代币（有税）",
+    "modePlain": "创建代币（无税）",
+    "noTaxBuySell": "买入 / 卖出税",
+    "noTaxPoolFee": "池子交易费",
+    "noTaxHint": "无税代币：链上买卖税全部为 0，只收 Portus 池子固定 1% 交易费。创建后不可改为有税。"
   },
   "launch": {
     "params": "链上参数",

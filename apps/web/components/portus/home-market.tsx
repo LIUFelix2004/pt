@@ -6,6 +6,7 @@ import { getLaunches, type Launch } from "@/lib/api";
 import { CHAIN_INFO } from "@/lib/chain";
 import { demoLaunches, isDemoLaunch } from "@/lib/demo-launches";
 import { useUiLang } from "@/components/portus/use-ui-lang";
+import { CreateMenu } from "@/components/portus/create-menu";
 import { cn } from "@/lib/utils";
 
 const ZH = {
@@ -409,12 +410,11 @@ export function HomeMarket({ initial }: { initial: Launch[] }) {
             <span className="block">{t.slogan.split(". ")[0]}</span>
             <span className="block">{t.slogan.split(". ")[1]}</span>
           </h1>
-          <Link
-            href="/create"
-            className="relative mt-4 inline-block rounded-[20px] bg-brand px-14 py-4 text-[20px] font-semibold text-white shadow-[0_10px_30px_-8px_var(--brand)] transition hover:brightness-110"
-          >
-            {t.cta}
-          </Link>
+          <div className="relative mt-4">
+            <CreateMenu className="inline-block rounded-[20px] bg-brand px-14 py-4 text-[20px] font-semibold text-white shadow-[0_10px_30px_-8px_var(--brand)] transition hover:brightness-110">
+              {t.cta}
+            </CreateMenu>
+          </div>
           <div className="relative mt-8 flex flex-wrap justify-center gap-3 text-sm text-fg-muted">
             {[
               [merged.length, t.sTotal],

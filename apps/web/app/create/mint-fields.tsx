@@ -76,7 +76,7 @@ export const tripleValid = (a: string, b: string, c: string) => {
   return Math.abs(xs[0] + xs[1] + xs[2] - 100) < 0.005;
 };
 
-export function useMintPlan(m: MintForm, decimals: number, self: Address | undefined) {
+export function useMintPlan(m: MintForm, decimals: number, self: Address | undefined, noTax = false) {
   return useMemo(() => {
     const rawR = whole(m.raise, decimals);
     const S0 = whole(m.initial, 18);
@@ -86,17 +86,20 @@ export function useMintPlan(m: MintForm, decimals: number, self: Address | undef
       growthBps: m.growthPct.map(bps),
     };
     const feeBps = feeBpsOf(m.feePct);
-    const feeOk = feeValid(m.feePct);
-    const creatorBps = feeOk ? feeBps - ECOSYSTEM_FEE_BPS : 0;
+    // No-tax token (?tax=0): every buy/sell tax slot is 0; Factory accepts this
+    // (_validateTax only caps sums / requires recipients for non-zero slots). Pool fee stays at the 1% tier.
+    const feeOk = noTax || feeValid(m.feePct);
+    const creatorBps = noTax ? 0 : feeOk ? feeBps - ECOSYSTEM_FEE_BPS : 0;
+    const ecoBps = noTax ? 0 : ECOSYSTEM_FEE_BPS;
     // Mapping (no contract change): buy foundation / sell tech = ecosystem 0.2%,
     // buy+sell community = creator T − 0.2%; no burn; anti-dump levy disabled.
     const tax = {
       buyBurnBps: 0,
       buyCommunityBps: creatorBps,
-      buyFoundationBps: ECOSYSTEM_FEE_BPS,
+      buyFoundationBps: ecoBps,
       sellBurnBps: 0,
       sellCommunityBps: creatorBps,
-      sellTechBps: ECOSYSTEM_FEE_BPS,
+      sellTechBps: ecoBps,
       dumpThresholdBps: 0,
       dumpBurnShareBps: 0,
     };
@@ -133,7 +136,7 @@ export function useMintPlan(m: MintForm, decimals: number, self: Address | undef
       !supplyOk && "blockMintSupply",
       !scheduleOk && "blockMintSchedule",
       !taxOk && "blockMintTax",
-      !tripleValid(m.shareFlywheel, m.shareCreator, m.shareTreasury) && "blockMintFeeShare",
+      !noTax && !tripleValid(m.shareFlywheel, m.shareCreator, m.shareTreasury) && "blockMintFeeShare",
       !tripleValid(m.splitSale, m.splitLp, m.splitReward) && "blockMintSupplySplit",
       !addressesOk && "blockMintAddress",
     ].filter(Boolean) as string[];
@@ -150,7 +153,7 @@ export function useMintPlan(m: MintForm, decimals: number, self: Address | undef
           }
         : null;
     return { preview, summary, blockers, ok: blockers.length === 0, params, maxSupply: MAX };
-  }, [m, decimals, self]);
+  }, [m, decimals, self, noTax]);
 }
 
 type Plan = ReturnType<typeof useMintPlan>;
@@ -297,6 +300,26 @@ export function MintScheduleFields({
       <p className="rounded-md border border-line bg-surface-2/60 px-3 py-2 text-[12.5px] leading-relaxed text-fg-muted">
         {t("mintRewardsNote")}
       </p>
+    </div>
+  );
+}
+
+export function MintNoTaxFields() {
+  const t = useTranslations("create");
+  return (
+    <div className={SECTION}>
+      <div className={KICKER}>{t("sectionMintTax")}</div>
+      <div className="grid gap-3 rounded-md border border-line bg-surface-2/60 p-4 font-mono text-[12.5px] sm:grid-cols-2">
+        <div>
+          <div className="text-fg-muted">{t("noTaxBuySell")}</div>
+          <div className="text-fg">0%</div>
+        </div>
+        <div>
+          <div className="text-fg-muted">{t("noTaxPoolFee")}</div>
+          <div className="text-fg">1%</div>
+        </div>
+      </div>
+      <p className={HINT}>{t("noTaxHint")}</p>
     </div>
   );
 }

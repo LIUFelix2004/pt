@@ -33,7 +33,7 @@ import { ACTIVE_CHAIN, CHAIN_ID, CHAIN_INFO, FACTORY } from "@/lib/chain";
 import { errorKey } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { ConnectButtons } from "@/components/portus/connect-buttons";
-import { MINT_FORM_DEFAULTS, MintRaiseFields, MintScheduleFields, MintTaxFields, useMintPlan, type MintForm } from "./mint-fields";
+import { MINT_FORM_DEFAULTS, MintRaiseFields, MintScheduleFields, MintTaxFields, MintNoTaxFields, useMintPlan, type MintForm } from "./mint-fields";
 
 const FIELD =
   "mt-1.5 w-full rounded-md border border-line bg-bg px-3 py-2 font-mono text-sm text-fg outline-none transition-colors placeholder:text-fg-muted/60 focus:border-cyan/60 focus:ring-1 focus:ring-cyan/40";
@@ -125,7 +125,23 @@ export function CreateLaunchForm() {
   const decimals = asset?.decimals ?? 18;
   const symbol = asset?.symbol ?? "QUOTE";
   const incentiveBps = Math.round(Number(form.incentivePct || 0) * 100);
-  const mintPlan = useMintPlan(mint, decimals, address);
+  const [noTax, setNoTax] = useState(false);
+  useEffect(() => {
+    const read = () => setNoTax(new URLSearchParams(window.location.search).get("tax") === "0");
+    read();
+    const onPick = (e: Event) => setNoTax((e as CustomEvent<number>).detail === 0);
+    window.addEventListener("popstate", read);
+    window.addEventListener("portus-tax", onPick);
+    return () => {
+      window.removeEventListener("popstate", read);
+      window.removeEventListener("portus-tax", onPick);
+    };
+  }, []);
+  const chooseTax = (v: boolean) => {
+    setNoTax(!v);
+    window.history.replaceState(null, "", `/create/?tax=${v ? 1 : 0}`);
+  };
+  const mintPlan = useMintPlan(mint, decimals, address, noTax);
   const isMint = kind === "MINT";
 
   // Live preview: FDV -> R (snapped to granularity) -> price and supply split.
@@ -500,7 +516,21 @@ export function CreateLaunchForm() {
           ) : null}
         </div>
 
-        {isMint ? <MintTaxFields m={mint} setM={setM} /> : null}
+        {isMint ? (
+          <div className="flex gap-2 rounded-xl border border-line bg-surface-2/60 p-1 text-sm">
+            {[true, false].map((v) => (
+              <button
+                key={String(v)}
+                type="button"
+                onClick={() => chooseTax(v)}
+                className={cn("flex-1 rounded-lg px-3 py-2 font-semibold", noTax === !v ? "bg-bg text-brand shadow-sm" : "text-fg-muted")}
+              >
+                {v ? t("modeTaxed") : t("modePlain")}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {isMint ? (noTax ? <MintNoTaxFields /> : <MintTaxFields m={mint} setM={setM} />) : null}
         {isMint ? <MintScheduleFields m={mint} setM={setM} plan={mintPlan} /> : null}
 
         {/* trading */}

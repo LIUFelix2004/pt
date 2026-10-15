@@ -241,7 +241,12 @@
     "mintSplitInvalid": "Each 0–100, must sum to 100%",
     "mintSplitPriceHint": "Opening price = subscription price requires Subscription = Pool.",
     "mintSplitWarn": "The contract currently fixes Subscription 50% / Pool 50%; custom splits take effect after a contract upgrade. Creation goes on-chain as 50/50.",
-    "blockMintSupplySplit": "Supply split Subscription/Pool/Initial rewards must sum to 100%"
+    "blockMintSupplySplit": "Supply split Subscription/Pool/Initial rewards must sum to 100%",
+    "modeTaxed": "Create token (with tax)",
+    "modePlain": "Create token (no tax)",
+    "noTaxBuySell": "Buy / sell tax",
+    "noTaxPoolFee": "Pool trading fee",
+    "noTaxHint": "No-tax token: all on-chain buy/sell tax slots are 0; only the fixed 1% Portus pool fee applies. Cannot be changed to taxed after creation."
   },
   "launch": {
     "params": "On-chain parameters",

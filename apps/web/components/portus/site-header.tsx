@@ -7,6 +7,7 @@ import { LanguageSwitcher } from "@/components/portus/language-switcher";
 import { useUiLang } from "@/components/portus/use-ui-lang";
 import { DOCS_URL } from "@/lib/chain";
 import { cn } from "@/lib/utils";
+import { CreateMenu } from "@/components/portus/create-menu";
 
 export const DEBOX_URL = "https://debox.pro";
 export const X_URL = process.env.NEXT_PUBLIC_X_URL || "https://x.com/ARCISALL";
@@ -88,6 +89,16 @@ export function SiteHeader() {
         <nav className="hidden items-center gap-5 text-base sm:flex">
           {LINKS.map((l) => {
             const on = l.match(pathname);
+            if (l.key === "create")
+              return (
+                <CreateMenu
+                  key={l.href}
+                  align="left"
+                  className={cn("rounded-lg px-2.5 py-1.5 text-fg transition-colors hover:text-fg", on && "bg-surface-2 text-brand")}
+                >
+                  {t[l.key]}
+                </CreateMenu>
+              );
             return (
               <Link
                 key={l.href}
@@ -141,6 +152,12 @@ export function SiteHeader() {
       <nav className="flex gap-1 overflow-x-auto border-t border-line px-3 py-2 sm:hidden">
         {LINKS.map((l) => {
           const on = l.match(pathname);
+          if (l.key === "create")
+            return (
+              <CreateMenu key={l.href} align="left" className={cn("shrink-0 rounded-lg px-3 py-1.5 text-sm text-fg", on && "bg-surface-2 text-brand")}>
+                {t[l.key]}
+              </CreateMenu>
+            );
           return (
             <Link
               key={l.href}
