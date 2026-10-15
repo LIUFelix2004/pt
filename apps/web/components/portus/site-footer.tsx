@@ -5,7 +5,7 @@ import { useUiLang } from "@/components/portus/use-ui-lang";
 import { DOCS_URL } from "@/lib/chain";
 
 const DEBOX_URL = "https://debox.pro";
-const X_URL = process.env.NEXT_PUBLIC_X_URL || "https://x.com/ARCISALL";
+const X_URL = process.env.NEXT_PUBLIC_X_URL || "https://x.com/PortusFun";
 
 const ZH = {
   desc: "Launch Social. Launch Anywhere —— 铸币即发射、公平分发、链上可验证的发射平台。",

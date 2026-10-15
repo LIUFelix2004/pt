@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { CreateMenu } from "@/components/portus/create-menu";
 
 export const DEBOX_URL = "https://debox.pro";
-export const X_URL = process.env.NEXT_PUBLIC_X_URL || "https://x.com/ARCISALL";
+export const X_URL = process.env.NEXT_PUBLIC_X_URL || "https://x.com/PortusFun";
 
 const ZH = {
   home: "首页",
